@@ -1,0 +1,3344 @@
+From e4ffeb4a6d0f78a0bb7473b14edfc44033a4eeb4 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+Date: Sat, 14 Oct 2017 12:33:58 +0800
+Subject: [PATCH 1/4] Saturn_SFU: Porting spi-nand support patch form Micron.
+
+	From 22f1cdb93782a04fe89985ac6209b27f9a6df2d3 Mon Sep 17 00:00:00 2001
+	From: Peter Pan <peterpandong@micron.com>
+	Date: Thu, 24 Dec 2015 09:01:00 +0800
+	Subject: [PATCH 1/3] mtd: spi-nand: Add Micron SPI NAND support
+
+	This patch is to support Micron SPI NAND. Now it only supports
+	1Gb/2Gb M79A SPI NAND.
+
+	From 966f3f6624381e7522d953eccf439914ccdf1ef3 Mon Sep 17 00:00:00 2001
+	From: Peter Pan <peterpandong@micron.com>
+	Date: Wed, 4 Nov 2015 14:54:48 +0800
+	Subject: [PATCH 2/3] mtd: spi-nand: add spi_nand_lun_select()
+
+	Some Micron 4Gb SPI NAND chips have two LUN and need to issue a
+	die(LUN) select command to switch die(LUN) when target die(LUN)
+	changes. Default die(LUN) is 0. This commit is to enable Micron
+	4Gb SPI NAND by add die(LUN) selection.
+
+	From 97aa99d5e3cb2b3d54c18bdabb9c997cc5767acb Mon Sep 17 00:00:00 2001
+	From: Peter Pan <peterpandong@micron.com>
+	Date: Tue, 22 Dec 2015 09:08:23 +0800
+	Subject: [PATCH 3/3] mtd: spi-nand: poll MIN_TRY_COUNT times SR before timeout
+
+	In case time is out but we only read SR once.
+
+	Signed-off-by: Peter Pan <peterpandong@micron.com>
+
+Signed-off-by: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+---
+ Makefile                              |    1 +
+ common/Makefile                       |    3 +
+ common/cmd_nvedit.c                   |    1 +
+ common/cmd_spi_nand.c                 |  354 ++++++
+ common/env_spi_nand.c                 |  333 ++++++
+ drivers/mtd/Kconfig                   |    2 +
+ drivers/mtd/spi-nand/Kconfig          |   10 +
+ drivers/mtd/spi-nand/Makefile         |    2 +
+ drivers/mtd/spi-nand/spi-nand-base.c  | 2025 +++++++++++++++++++++++++++++++++
+ drivers/mtd/spi-nand/spi-nand-cmd.c   |  131 +++
+ drivers/mtd/spi/cortina_serial_nand.c |    0
+ include/spi-nand.h                    |  308 +++++
+ include/spi.h                         |    2 +
+ 13 files changed, 3172 insertions(+)
+ create mode 100755 common/cmd_spi_nand.c
+ create mode 100755 common/env_spi_nand.c
+ create mode 100644 drivers/mtd/spi-nand/Kconfig
+ create mode 100644 drivers/mtd/spi-nand/Makefile
+ create mode 100644 drivers/mtd/spi-nand/spi-nand-base.c
+ create mode 100644 drivers/mtd/spi-nand/spi-nand-cmd.c
+ mode change 100755 => 100644 drivers/mtd/spi/cortina_serial_nand.c
+ create mode 100644 include/spi-nand.h
+
+diff --git a/Makefile b/Makefile
+index 950c960..6894080 100644
+--- a/Makefile
++++ b/Makefile
+@@ -638,6 +638,7 @@ libs-$(CONFIG_CMD_NAND) += drivers/mtd/nand/
+ libs-y += drivers/mtd/onenand/
+ libs-$(CONFIG_CMD_UBI) += drivers/mtd/ubi/
+ libs-y += drivers/mtd/spi/
++libs-y += drivers/mtd/spi-nand/
+ libs-y += drivers/net/
+ libs-y += drivers/net/phy/
+ libs-y += drivers/pci/
+diff --git a/common/Makefile b/common/Makefile
+index 4abd433..143d21f 100755
+--- a/common/Makefile
++++ b/common/Makefile
+@@ -57,6 +57,7 @@ obj-$(CONFIG_ENV_IS_IN_NAND) += env_nand.o
+ obj-$(CONFIG_ENV_IS_IN_NVRAM) += env_nvram.o
+ obj-$(CONFIG_ENV_IS_IN_ONENAND) += env_onenand.o
+ obj-$(CONFIG_ENV_IS_IN_SPI_FLASH) += env_sf.o
++obj-$(CONFIG_ENV_IS_IN_SPI_NAND) += env_spi_nand.o
+ obj-$(CONFIG_ENV_IS_IN_REMOTE) += env_remote.o
+ obj-$(CONFIG_ENV_IS_IN_UBI) += env_ubi.o
+ obj-$(CONFIG_ENV_IS_NOWHERE) += env_nowhere.o
+@@ -159,6 +160,7 @@ obj-$(CONFIG_CMD_REISER) += cmd_reiser.o
+ obj-$(CONFIG_SANDBOX) += cmd_sandbox.o
+ obj-$(CONFIG_CMD_SATA) += cmd_sata.o
+ obj-$(CONFIG_CMD_SF) += cmd_sf.o
++obj-$(CONFIG_CMD_SPI_NAND) += cmd_spi_nand.o
+ obj-$(CONFIG_CMD_SCSI) += cmd_scsi.o
+ obj-$(CONFIG_CMD_SHA1SUM) += cmd_sha1sum.o
+ obj-$(CONFIG_CMD_SETEXPR) += cmd_setexpr.o
+@@ -236,6 +238,7 @@ obj-$(CONFIG_ENV_IS_IN_MMC) += env_mmc.o
+ obj-$(CONFIG_ENV_IS_IN_FAT) += env_fat.o
+ obj-$(CONFIG_ENV_IS_IN_NAND) += env_nand.o
+ obj-$(CONFIG_ENV_IS_IN_SPI_FLASH) += env_sf.o
++obj-$(CONFIG_ENV_IS_IN_SPI_NAND) += env_spi_nand.o
+ obj-$(CONFIG_ENV_IS_IN_FLASH) += env_flash.o
+ endif
+ endif
+diff --git a/common/cmd_nvedit.c b/common/cmd_nvedit.c
+index 855808c..639eded 100644
+--- a/common/cmd_nvedit.c
++++ b/common/cmd_nvedit.c
+@@ -47,6 +47,7 @@ DECLARE_GLOBAL_DATA_PTR;
+ 	!defined(CONFIG_ENV_IS_IN_NVRAM)	&& \
+ 	!defined(CONFIG_ENV_IS_IN_ONENAND)	&& \
+ 	!defined(CONFIG_ENV_IS_IN_SPI_FLASH)	&& \
++	!defined(CONFIG_ENV_IS_IN_SPI_NAND)	&& \
+ 	!defined(CONFIG_ENV_IS_IN_REMOTE)	&& \
+ 	!defined(CONFIG_ENV_IS_IN_UBI)		&& \
+ 	!defined(CONFIG_ENV_IS_NOWHERE)
+diff --git a/common/cmd_spi_nand.c b/common/cmd_spi_nand.c
+new file mode 100755
+index 0000000..5ce2b45
+--- /dev/null
++++ b/common/cmd_spi_nand.c
+@@ -0,0 +1,354 @@
++/*
++ * Command for accessing SPI flash.
++ *
++ * Copyright (C) 2008 Atmel Corporation
++ *
++ * SPDX-License-Identifier:	GPL-2.0+
++ */
++
++#include <common.h>
++#include <malloc.h>
++#include <spi.h>
++#include <spi-nand.h>
++#include <asm/io.h>
++
++#ifndef CONFIG_SF_DEFAULT_SPEED
++# define CONFIG_SF_DEFAULT_SPEED	1000000
++#endif
++#ifndef CONFIG_SF_DEFAULT_MODE
++# define CONFIG_SF_DEFAULT_MODE		SPI_MODE_3
++#endif
++#ifndef CONFIG_SF_DEFAULT_CS
++# define CONFIG_SF_DEFAULT_CS		0
++#endif
++#ifndef CONFIG_SF_DEFAULT_BUS
++# define CONFIG_SF_DEFAULT_BUS		0
++#endif
++
++static struct spi_nand_chip *chip;
++/*
++ * This function computes the length argument for the erase command.
++ * The length on which the command is to operate can be given in two forms:
++ * 1. <cmd> offset len  - operate on <'offset',  'len')
++ * 2. <cmd> offset +len - operate on <'offset',  'round_up(len)')
++ * If the second form is used and the length doesn't fall on the
++ * sector boundary, than it will be adjusted to the next sector boundary.
++ * If it isn't in the flash, the function will fail (return -1).
++ * Input:
++ *    arg: length specification (i.e. both command arguments)
++ * Output:
++ *    len: computed length for operation
++ * Return:
++ *    1: success
++ *   -1: failure (bad format, bad address).
++ */
++static int sf_parse_len_arg(char *arg, ulong *len)
++{
++	char *ep;
++	char round_up_len; /* indicates if the "+length" form used */
++	ulong len_arg;
++
++	round_up_len = 0;
++	if (*arg == '+') {
++		round_up_len = 1;
++		++arg;
++	}
++
++	len_arg = simple_strtoul(arg, &ep, 16);
++	if (ep == arg || *ep != '\0')
++		return -1;
++
++	if (round_up_len && chip->block_size > 0)
++		*len = ROUND(len_arg, chip->block_size);
++	else
++		*len = len_arg;
++
++	return 1;
++}
++
++struct spi_nand_chip *spi_nand_flash_probe(unsigned int busnum, unsigned int cs,
++		unsigned int max_hz, unsigned int spi_mode)
++{
++	struct spi_slave *bus;
++	struct spi_nand_chip *chip;
++	int ret;
++
++	bus = spi_setup_slave(busnum, cs, max_hz, spi_mode);
++	ret = spi_nand_probe_slave(bus, &chip);
++	if (ret) {
++		printf("spi_nand_init failed\n");
++		return NULL;
++	}
++	return chip;
++}
++
++void spi_nand_flash_free(struct spi_nand_chip *chip)
++{
++	spi_free_slave(chip->spi);
++	spi_nand_release(chip);
++}
++
++static int do_spi_nand_flash_probe(int argc, char * const argv[])
++{
++	unsigned int bus = CONFIG_SF_DEFAULT_BUS;
++	unsigned int cs = CONFIG_SF_DEFAULT_CS;
++	unsigned int speed = CONFIG_SF_DEFAULT_SPEED;
++	unsigned int mode = CONFIG_SF_DEFAULT_MODE;
++	char *endp;
++	struct spi_nand_chip *new;
++
++	if (argc >= 2) {
++		cs = simple_strtoul(argv[1], &endp, 0);
++		if (*argv[1] == 0 || (*endp != 0 && *endp != ':'))
++			return -1;
++		if (*endp == ':') {
++			if (endp[1] == 0)
++				return -1;
++
++			bus = cs;
++			cs = simple_strtoul(endp + 1, &endp, 0);
++			if (*endp != 0)
++				return -1;
++		}
++	}
++
++	if (argc >= 3) {
++		speed = simple_strtoul(argv[2], &endp, 0);
++		if (*argv[2] == 0 || *endp != 0)
++			return -1;
++	}
++	if (argc >= 4) {
++		mode = simple_strtoul(argv[3], &endp, 16);
++		if (*argv[3] == 0 || *endp != 0)
++			return -1;
++	}
++
++	new = spi_nand_flash_probe(bus, cs, speed, mode);
++	if (!new) {
++		printf("Failed to initialize SPI NAND flash at %u:%u\n", bus, cs);
++		return 1;
++	}
++
++	if (chip)
++		spi_nand_flash_free(chip);
++	chip = new;
++
++	return 0;
++}
++
++/**
++ * Update an area of SPI flash by erasing and writing any blocks which need
++ * to change. Existing blocks with the correct data are left unchanged.
++ *
++ * @param flash		flash context pointer
++ * @param offset	flash offset to write
++ * @param len		number of bytes to write
++ * @param buf		buffer to write from
++ * @return 0 if ok, 1 on error
++ */
++static int spi_nand_flash_update(struct spi_nand_chip *chip, u32 offset,
++		size_t len, const char *buf)
++{
++	int ret = 0;
++
++	ret = spi_nand_cmd_erase_ops(chip, offset, len, true);
++	if (ret) {
++		printf("SPI-NAND: %zu bytes @ %#x Erased: ERROR\n", (size_t)len, (u32)offset);
++		return ret;
++	}
++	ret = spi_nand_cmd_write_ops(chip, offset, len, buf);
++	if (ret) {
++		printf("SPI-NAND: %zu bytes @ %#x Written: ERROR\n", (size_t)len, (u32)offset);
++	}
++	return ret;
++}
++
++static int do_spi_nand_flash_read_write(int argc, char * const argv[])
++{
++	unsigned long addr;
++	unsigned long offset;
++	unsigned long len;
++	void *buf;
++	char *endp;
++	int ret = 1;
++
++	if (argc < 4)
++		return -1;
++
++	addr = simple_strtoul(argv[1], &endp, 16);
++	if (*argv[1] == 0 || *endp != 0)
++		return -1;
++	offset = simple_strtoul(argv[2], &endp, 16);
++	if (*argv[2] == 0 || *endp != 0)
++		return -1;
++	len = simple_strtoul(argv[3], &endp, 16);
++	if (*argv[3] == 0 || *endp != 0)
++		return -1;
++
++	/* Consistency checking */
++	if (offset + len > chip->size) {
++		printf("ERROR: attempting %s past flash size (%#llx)\n",
++		       argv[0], chip->size);
++		return 1;
++	}
++
++	buf = map_physmem(addr, len, MAP_WRBACK);
++	if (!buf) {
++		puts("Failed to map physical memory\n");
++		return 1;
++	}
++
++	if (strcmp(argv[0], "update") == 0) {
++		ret = spi_nand_flash_update(chip, offset, len, buf);
++		printf("SPI-NAND: %zu bytes @ %#x Updated: %s\n", (size_t)len, (u32)offset,
++		       ret ? "ERROR" : "OK");
++	} else if (strncmp(argv[0], "read", 4) == 0 ||
++			strncmp(argv[0], "write", 5) == 0) {
++		int read;
++
++		read = strncmp(argv[0], "read", 4) == 0;
++		if (read)
++			ret = spi_nand_cmd_read_ops(chip, offset, len, buf);
++		else
++			ret = spi_nand_cmd_write_ops(chip, offset, len, buf);
++
++		printf("SPI-NAND: %zu bytes @ %#x %s: %s\n", (size_t)len, (u32)offset,
++		       read ? "Read" : "Written", ret ? "ERROR" : "OK");
++	}
++
++	unmap_physmem(buf, len);
++
++	return ret == 0 ? 0 : 1;
++}
++
++static int do_spi_nand_flash_erase(int argc, char * const argv[], bool spread)
++{
++	unsigned long offset;
++	unsigned long len;
++	char *endp;
++	int ret;
++
++	if (argc < 3)
++		return -1;
++
++	offset = simple_strtoul(argv[1], &endp, 16);
++	if (*argv[1] == 0 || *endp != 0)
++		return -1;
++
++	ret = sf_parse_len_arg(argv[2], &len);
++	if (ret != 1)
++		return -1;
++
++	/* Consistency checking */
++	if (offset + len > chip->size) {
++		printf("ERROR: attempting %s past flash size (%#llx)\n",
++		       argv[0], chip->size);
++		return 1;
++	}
++
++	ret = spi_nand_cmd_erase_ops(chip, offset, len, spread);
++	printf("SPI-NAND: %zu bytes @ %#x Erased: %s\n", (size_t)len, (u32)offset,
++	       ret ? "ERROR" : "OK");
++
++	return ret == 0 ? 0 : 1;
++}
++
++static int do_spi_nand_flash_show_bad(void)
++{
++	loff_t offset;
++
++	for (offset = 0; offset < chip->size; offset += chip->block_size) {
++		if(spi_nand_block_isbad(chip, offset))
++			printf("Bad block at 0x%#llx\n", offset);
++	}
++
++	return 0;
++}
++
++static int do_spi_nand_flash_mark_bad(int argc, char * const argv[])
++{
++	int ret;
++	loff_t offset;
++	char *endp;
++
++	if (argc < 2)
++		return -1;
++
++	offset = simple_strtoul(argv[1], &endp, 16);
++	if (*argv[1] == 0 || *endp != 0)
++		return -1;
++
++	ret = spi_nand_block_markbad(chip, offset);
++	if (!ret) {
++		printf("SPI-NAND: 0x%#llx marked as bad block\n", offset);
++	}
++
++	return ret == 0 ? 0 : 1;
++}
++
++static int do_spi_nand_flash(cmd_tbl_t *cmdtp, int flag, int argc,
++			char * const argv[])
++{
++	const char *cmd;
++	int ret;
++
++	/* need at least two arguments */
++	if (argc < 2)
++		goto usage;
++
++	cmd = argv[1];
++	--argc;
++	++argv;
++
++	if (strcmp(cmd, "probe") == 0) {
++		ret = do_spi_nand_flash_probe(argc, argv);
++		goto done;
++	}
++
++	/* The remaining commands require a selected device */
++	if (!chip) {
++		puts("No SPI flash selected. Please run `spi_nand probe'\n");
++		return 1;
++	}
++
++	if (strcmp(cmd, "read") == 0 || strcmp(cmd, "write") == 0 ||
++	    strcmp(cmd, "update") == 0)
++		ret = do_spi_nand_flash_read_write(argc, argv);
++	else if (strcmp(cmd, "erase") == 0)
++		ret = do_spi_nand_flash_erase(argc, argv, false);
++	else if (strcmp(cmd, "erase.spread") == 0)
++		ret = do_spi_nand_flash_erase(argc, argv, true);
++	else if (strcmp(cmd, "bad") == 0)
++		ret = do_spi_nand_flash_show_bad();
++	else if (strcmp(cmd, "markbad") == 0)
++		ret = do_spi_nand_flash_mark_bad(argc, argv);
++	else
++		ret = -1;
++
++done:
++	if (ret != -1)
++		return ret;
++
++usage:
++	return CMD_RET_USAGE;
++}
++
++
++U_BOOT_CMD(
++	spi_nand,	5,	1,	do_spi_nand_flash,
++	"SPI NAND flash sub-system",
++	"probe [[bus:]cs] [hz] [mode]	- init flash device on given SPI bus\n"
++	"				  and chip select\n"
++	"spi_nand read addr offset len	- read `len' bytes starting at\n"
++	"				  `offset' to memory at `addr', skipping bad blocks.\n"
++	"spi_nand write addr offset len	- write `len' bytes from memory\n"
++	"				  at `addr' to flash at `offset', skipping bad blocks.\n"
++	"spi_nand erase[.spread] offset [+]len		- erase `len' bytes from `offset'\n"
++	"				  `+len' round up `len' to block size\n"
++	"				  With '.spread', erase enough for given file size, otherwise,\n"
++	"				  'size' includes skipped bad blocks.\n"
++	"spi_nand update addr offset len	- erase and write `len' bytes from memory\n"
++	"				  at `addr' to flash at `offset'\n"
++	"spi_nand bad - show bad blocks\n"
++	"spi_nand markbad offset - mark block include `offset' as bad block\n"
++);
+diff --git a/common/env_spi_nand.c b/common/env_spi_nand.c
+new file mode 100755
+index 0000000..7ba73af
+--- /dev/null
++++ b/common/env_spi_nand.c
+@@ -0,0 +1,333 @@
++/*
++ * (C) Copyright 2000-2010
++ * Wolfgang Denk, DENX Software Engineering, wd@denx.de.
++ *
++ * (C) Copyright 2001 Sysgo Real-Time Solutions, GmbH <www.elinos.com>
++ * Andreas Heppel <aheppel@sysgo.de>
++ *
++ * (C) Copyright 2008 Atmel Corporation
++ *
++ * SPDX-License-Identifier:	GPL-2.0+
++ */
++#include <common.h>
++#include <environment.h>
++#include <malloc.h>
++#include <spi.h>
++#include <spi-nand.h>
++#include <search.h>
++#include <errno.h>
++
++#ifndef CONFIG_ENV_SPI_BUS
++# define CONFIG_ENV_SPI_BUS	0
++#endif
++#ifndef CONFIG_ENV_SPI_CS
++# define CONFIG_ENV_SPI_CS	0
++#endif
++#ifndef CONFIG_ENV_SPI_MAX_HZ
++# define CONFIG_ENV_SPI_MAX_HZ	1000000
++#endif
++#ifndef CONFIG_ENV_SPI_MODE
++# define CONFIG_ENV_SPI_MODE	SPI_MODE_3
++#endif
++
++#ifdef CONFIG_ENV_OFFSET_REDUND
++static ulong env_offset		= CONFIG_ENV_OFFSET;
++static ulong env_new_offset	= CONFIG_ENV_OFFSET_REDUND;
++
++#define ACTIVE_FLAG	1
++#define OBSOLETE_FLAG	0
++#endif /* CONFIG_ENV_OFFSET_REDUND */
++
++DECLARE_GLOBAL_DATA_PTR;
++
++char *env_name_spec = "SPI Flash";
++
++static struct spi_nand_chip *env_flash;
++
++#if defined(CONFIG_ENV_OFFSET_REDUND)
++int saveenv(void)
++{
++	env_t	env_new;
++	char	*saved_buffer = NULL, flag = OBSOLETE_FLAG;
++	u32	saved_size, saved_offset, sector = 1;
++	int	ret;
++
++	if (!env_flash) {
++		env_flash = spi_nand_flash_probe(CONFIG_ENV_SPI_BUS,
++			CONFIG_ENV_SPI_CS,
++			CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
++		if (!env_flash) {
++			set_default_env("!spi_nand_flash_probe() failed");
++			return 1;
++		}
++	}
++
++	ret = env_export(&env_new);
++	if (ret)
++		return ret;
++	env_new.flags	= ACTIVE_FLAG;
++
++	if (gd->env_valid == 1) {
++		env_new_offset = CONFIG_ENV_OFFSET_REDUND;
++		env_offset = CONFIG_ENV_OFFSET;
++	} else {
++		env_new_offset = CONFIG_ENV_OFFSET;
++		env_offset = CONFIG_ENV_OFFSET_REDUND;
++	}
++
++	/* Is the sector larger than the env (i.e. embedded) */
++	if (CONFIG_ENV_SECT_SIZE > CONFIG_ENV_SIZE) {
++		saved_size = CONFIG_ENV_SECT_SIZE - CONFIG_ENV_SIZE;
++		saved_offset = env_new_offset + CONFIG_ENV_SIZE;
++		saved_buffer = malloc(saved_size);
++		if (!saved_buffer) {
++			ret = 1;
++			goto done;
++		}
++		ret = spi_nand_cmd_read_ops(env_flash, saved_offset,
++					saved_size, saved_buffer);
++		if (ret)
++			goto done;
++	}
++
++	if (CONFIG_ENV_SIZE > CONFIG_ENV_SECT_SIZE) {
++		sector = CONFIG_ENV_SIZE / CONFIG_ENV_SECT_SIZE;
++		if (CONFIG_ENV_SIZE % CONFIG_ENV_SECT_SIZE)
++			sector++;
++	}
++
++	puts("Erasing SPI flash...");
++	ret = spi_nand_cmd_erase_ops(env_flash, env_new_offset,
++				sector * CONFIG_ENV_SECT_SIZE, true);
++	if (ret)
++		goto done;
++
++	puts("Writing to SPI flash...");
++
++	ret = spi_nand_cmd_write_ops(env_flash, env_new_offset,
++		CONFIG_ENV_SIZE, &env_new);
++	if (ret)
++		goto done;
++
++	if (CONFIG_ENV_SECT_SIZE > CONFIG_ENV_SIZE) {
++		ret = spi_nand_cmd_write_ops(env_flash, saved_offset,
++					saved_size, saved_buffer);
++		if (ret)
++			goto done;
++	}
++
++	ret = spi_nand_cmd_write_ops(env_flash, env_offset + offsetof(env_t, flags),
++				sizeof(env_new.flags), &flag);
++	if (ret)
++		goto done;
++
++	puts("done\n");
++
++	gd->env_valid = gd->env_valid == 2 ? 1 : 2;
++
++	printf("Valid environment: %d\n", (int)gd->env_valid);
++
++ done:
++	if (saved_buffer)
++		free(saved_buffer);
++
++	return ret;
++}
++
++void env_relocate_spec(void)
++{
++	int ret;
++	int crc1_ok = 0, crc2_ok = 0;
++	env_t *tmp_env1 = NULL;
++	env_t *tmp_env2 = NULL;
++	env_t *ep = NULL;
++
++	tmp_env1 = (env_t *)malloc(CONFIG_ENV_SIZE);
++	tmp_env2 = (env_t *)malloc(CONFIG_ENV_SIZE);
++
++	if (!tmp_env1 || !tmp_env2) {
++		set_default_env("!malloc() failed");
++		goto out;
++	}
++
++	env_flash = spi_nand_flash_probe(CONFIG_ENV_SPI_BUS, CONFIG_ENV_SPI_CS,
++			CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
++	if (!env_flash) {
++		set_default_env("!spi_nand_flash_probe() failed");
++		goto out;
++	}
++
++	ret = spi_nand_cmd_read_ops(env_flash, CONFIG_ENV_OFFSET,
++				CONFIG_ENV_SIZE, tmp_env1);
++	if (ret) {
++		set_default_env("!spi_nand_cmd_read_ops() failed");
++		goto err_read;
++	}
++
++	if (crc32(0, tmp_env1->data, ENV_SIZE) == tmp_env1->crc)
++		crc1_ok = 1;
++
++	ret = spi_nand_cmd_read_ops(env_flash, CONFIG_ENV_OFFSET_REDUND,
++				CONFIG_ENV_SIZE, tmp_env2);
++	if (!ret) {
++		if (crc32(0, tmp_env2->data, ENV_SIZE) == tmp_env2->crc)
++			crc2_ok = 1;
++	}
++
++	if (!crc1_ok && !crc2_ok) {
++		set_default_env("!bad CRC");
++		goto err_read;
++	} else if (crc1_ok && !crc2_ok) {
++		gd->env_valid = 1;
++	} else if (!crc1_ok && crc2_ok) {
++		gd->env_valid = 2;
++	} else if (tmp_env1->flags == ACTIVE_FLAG &&
++		   tmp_env2->flags == OBSOLETE_FLAG) {
++		gd->env_valid = 1;
++	} else if (tmp_env1->flags == OBSOLETE_FLAG &&
++		   tmp_env2->flags == ACTIVE_FLAG) {
++		gd->env_valid = 2;
++	} else if (tmp_env1->flags == tmp_env2->flags) {
++		gd->env_valid = 1;
++	} else if (tmp_env1->flags == 0xFF) {
++		gd->env_valid = 1;
++	} else if (tmp_env2->flags == 0xFF) {
++		gd->env_valid = 2;
++	} else {
++		/*
++		 * this differs from code in env_flash.c, but I think a sane
++		 * default path is desirable.
++		 */
++		gd->env_valid = 1;
++	}
++
++	if (gd->env_valid == 1)
++		ep = tmp_env1;
++	else
++		ep = tmp_env2;
++
++	ret = env_import((char *)ep, 0);
++	if (!ret) {
++		error("Cannot import environment: errno = %d\n", errno);
++		set_default_env("env_import failed");
++	}
++
++err_read:
++	spi_nand_flash_free(env_flash);
++	env_flash = NULL;
++out:
++	free(tmp_env1);
++	free(tmp_env2);
++}
++#else
++int saveenv(void)
++{
++	u32	saved_size, saved_offset, sector = 1;
++	char	*saved_buffer = NULL;
++	int	ret = 1;
++	env_t	env_new;
++
++	if (!env_flash) {
++		env_flash = spi_nand_flash_probe(CONFIG_ENV_SPI_BUS,
++			CONFIG_ENV_SPI_CS,
++			CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
++		if (!env_flash) {
++			set_default_env("!spi_nand_flash_probe() failed");
++			return 1;
++		}
++	}
++
++	/* Is the sector larger than the env (i.e. embedded) */
++	if (CONFIG_ENV_SECT_SIZE > CONFIG_ENV_SIZE) {
++		saved_size = CONFIG_ENV_SECT_SIZE - CONFIG_ENV_SIZE;
++		saved_offset = CONFIG_ENV_OFFSET + CONFIG_ENV_SIZE;
++		saved_buffer = malloc(saved_size);
++		if (!saved_buffer)
++			goto done;
++
++		ret = spi_nand_cmd_read_ops(env_flash, saved_offset,
++			saved_size, saved_buffer);
++		if (ret)
++			goto done;
++	}
++
++	if (CONFIG_ENV_SIZE > CONFIG_ENV_SECT_SIZE) {
++		sector = CONFIG_ENV_SIZE / CONFIG_ENV_SECT_SIZE;
++		if (CONFIG_ENV_SIZE % CONFIG_ENV_SECT_SIZE)
++			sector++;
++	}
++
++	ret = env_export(&env_new);
++	if (ret)
++		goto done;
++
++	puts("Erasing SPI flash...");
++	ret = spi_nand_cmd_erase_ops(env_flash, CONFIG_ENV_OFFSET,
++		sector * CONFIG_ENV_SECT_SIZE, true);
++	if (ret)
++		goto done;
++
++	puts("Writing to SPI flash...");
++	ret = spi_nand_cmd_write_ops(env_flash, CONFIG_ENV_OFFSET,
++		CONFIG_ENV_SIZE, &env_new);
++	if (ret)
++		goto done;
++
++	if (CONFIG_ENV_SECT_SIZE > CONFIG_ENV_SIZE) {
++		ret = spi_nand_cmd_write_ops(env_flash, saved_offset,
++			saved_size, saved_buffer);
++		if (ret)
++			goto done;
++	}
++
++	ret = 0;
++	puts("done\n");
++
++ done:
++	if (saved_buffer)
++		free(saved_buffer);
++
++	return ret;
++}
++
++void env_relocate_spec(void)
++{
++	int ret;
++	char *buf = NULL;
++
++	buf = (char *)malloc(CONFIG_ENV_SIZE);
++	env_flash = spi_nand_flash_probe(CONFIG_ENV_SPI_BUS, CONFIG_ENV_SPI_CS,
++			CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
++	if (!env_flash) {
++		set_default_env("!spi_nand_flash_probe() failed");
++		if (buf)
++			free(buf);
++		return;
++	}
++
++	ret = spi_nand_cmd_read_ops(env_flash,
++		CONFIG_ENV_OFFSET, CONFIG_ENV_SIZE, buf);
++	if (ret) {
++		set_default_env("!spi_nand_cmd_read_ops() failed");
++		goto out;
++	}
++
++	ret = env_import(buf, 1);
++	if (ret)
++		gd->env_valid = 1;
++out:
++	spi_nand_flash_free(env_flash);
++	if (buf)
++		free(buf);
++	env_flash = NULL;
++}
++#endif
++
++int env_init(void)
++{
++	/* SPI flash isn't usable before relocation */
++	gd->env_addr = (ulong)&default_environment[0];
++	gd->env_valid = 1;
++
++	return 0;
++}
+diff --git a/drivers/mtd/Kconfig b/drivers/mtd/Kconfig
+index 59278d1..63c5c9d 100644
+--- a/drivers/mtd/Kconfig
++++ b/drivers/mtd/Kconfig
+@@ -1,3 +1,5 @@
+ source "drivers/mtd/nand/Kconfig"
+ 
+ source "drivers/mtd/spi/Kconfig"
++
++source "drivers/mtd/spi-nand/Kconfig"
+diff --git a/drivers/mtd/spi-nand/Kconfig b/drivers/mtd/spi-nand/Kconfig
+new file mode 100644
+index 0000000..0db6e74
+--- /dev/null
++++ b/drivers/mtd/spi-nand/Kconfig
+@@ -0,0 +1,10 @@
++menu "SPI NAND Support"
++
++config SPI_NAND_USE_SPI_NOR_RD_PROT
++	bool "Use SPI NOR flash 03h/0bh read protocol"
++	default n
++	help
++		Micron M79A SPI NAND support implement 03h/0Bh command, as is done
++		with SPI NOR for compatibility.
++
++endmenu # menu "SPI NAND Support"
+diff --git a/drivers/mtd/spi-nand/Makefile b/drivers/mtd/spi-nand/Makefile
+new file mode 100644
+index 0000000..1303858
+--- /dev/null
++++ b/drivers/mtd/spi-nand/Makefile
+@@ -0,0 +1,2 @@
++obj-$(CONFIG_SPI_NAND) +=  spi-nand-base.o
++obj-$(CONFIG_SPI_NAND) +=  spi-nand-cmd.o
+diff --git a/drivers/mtd/spi-nand/spi-nand-base.c b/drivers/mtd/spi-nand/spi-nand-base.c
+new file mode 100644
+index 0000000..2982d9e
+--- /dev/null
++++ b/drivers/mtd/spi-nand/spi-nand-base.c
+@@ -0,0 +1,2025 @@
++/**
++* spi-nand-base.c
++*
++* Copyright (c) 2009-2015 Micron Technology, Inc.
++*
++* This program is free software; you can redistribute it and/or
++* modify it under the terms of the GNU General Public License
++* as published by the Free Software Foundation; either version 2
++* of the License, or (at your option) any later version.
++*
++* This program is distributed in the hope that it will be useful,
++* but WITHOUT ANY WARRANTY; without even the implied warranty of
++* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++* GNU General Public License for more details.
++*/
++#include <common.h>
++#include <malloc.h>
++#include <linux/mtd/mtd.h>
++#include <spi-nand.h>
++#include <asm-generic/errno.h>
++#include <spi.h>
++
++extern int spi_nand_issue_cmd(struct spi_nand_chip *chip, struct spi_nand_cmd *cmd);
++static int spi_nand_erase(struct spi_nand_chip *chip, uint64_t addr, uint64_t len);
++
++static struct spi_nand_flash spi_nand_table[] = {
++	SPI_NAND_INFO("MT29F2G01AAAED", 0x2C, 0x22, 2048, 64, 64, 2048,
++			1, 1, SPINAND_NEED_PLANE_SELECT),
++	SPI_NAND_INFO("MT29F4G01AAADD", 0x2C, 0x32, 2048, 64, 64, 4096,
++			1, 1, SPINAND_NEED_PLANE_SELECT),
++	SPI_NAND_INFO("MT29F4G01ABAGD", 0x2C, 0x36, 2048, 128, 64, 2048,
++			2, 8, SPINAND_NEED_PLANE_SELECT | SPINAND_NEED_DIE_SELECT),
++	SPI_NAND_INFO("MT29F2G01ABAGD", 0x2C, 0x24, 2048, 128, 64, 2048,
++			1, 8, SPINAND_NEED_PLANE_SELECT),
++	{.name = NULL},
++};
++
++/* OOB layout */
++static struct nand_ecclayout micron_ecc_layout_64 = {
++	.eccbytes = 32,
++	.eccpos = {
++		8, 9, 10, 11, 12, 13, 14, 15,
++		24, 25, 26, 27, 28, 29, 30, 21,
++		40, 41, 42, 43, 44, 45, 46, 47,
++		56, 57, 58, 59, 60, 61, 62, 63},
++	.oobavail = 30,
++	.oobfree = {
++		{.offset = 2,
++		 .length = 6},
++		{.offset = 16,
++		 .length = 8},
++		{.offset = 32,
++		 .length = 8},
++		{.offset = 48,
++		 .length = 8}, }
++};
++
++static struct nand_ecclayout micron_ecc_layout_128 = {
++	.eccbytes = 64,
++	.eccpos = {
++		64, 65, 66, 67, 68, 69, 70, 71,
++		72, 73, 74, 75, 76, 77, 78, 79,
++		80, 81, 82, 83, 84, 85, 86, 87,
++		88, 89, 90, 91, 92, 93, 94, 95,
++		96, 97, 98, 99, 100, 101, 102, 103,
++		104, 105, 106, 107, 108, 109, 110, 111,
++		112, 113, 114, 115, 116, 117, 118, 119,
++		120, 121, 122, 123, 124, 125, 126, 127},
++	.oobavail = 62,
++	.oobfree = {
++		{.offset = 2,
++		 .length = 62}, }
++};
++
++/**
++ * spi_nand_read_reg - send command 0Fh to read register
++ * @chip: SPI-NAND device structure
++ * @reg; register to read
++ * @buf: buffer to store value
++ */
++static int spi_nand_read_reg(struct spi_nand_chip *chip,
++			uint8_t reg, uint8_t *buf)
++{
++	struct spi_nand_cmd cmd;
++	int ret;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_GET_FEATURE;
++	cmd.n_addr = 1;
++	cmd.addr[0] = reg;
++	cmd.n_rx = 1;
++	cmd.rx_buf = buf;
++
++	ret = spi_nand_issue_cmd(chip, &cmd);
++	if (ret < 0)
++		spi_nand_error("err: %d read register %d\n", ret, reg);
++
++	return ret;
++}
++
++/**
++ * spi_nand_write_reg - send command 1Fh to write register
++ * @chip: SPI-NAND device structure
++ * @reg; register to write
++ * @buf: buffer stored value
++ */
++static int spi_nand_write_reg(struct spi_nand_chip *chip,
++			uint8_t reg, uint8_t *buf)
++{
++	struct spi_nand_cmd cmd;
++	int ret;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_SET_FEATURE;
++	cmd.n_addr = 1;
++	cmd.addr[0] = reg;
++	cmd.n_tx = 1,
++	cmd.tx_buf = buf,
++
++	ret = spi_nand_issue_cmd(chip, &cmd);
++	if (ret < 0)
++		spi_nand_error("err: %d write register %d\n", ret, reg);
++
++	return ret;
++}
++
++/**
++ * spi_nand_read_status - get status register value
++ * @chip: SPI-NAND device structure
++ * @status: buffer to store value
++ * Description:
++ *   After read, write, or erase, the Nand device is expected to set the
++ *   busy status.
++ *   This function is to allow reading the status of the command: read,
++ *   write, and erase.
++ *   Once the status turns to be ready, the other status bits also are
++ *   valid status bits.
++ */
++static int spi_nand_read_status(struct spi_nand_chip *chip, uint8_t *status)
++{
++	return spi_nand_read_reg(chip, REG_STATUS, status);
++}
++
++/**
++ * spi_nand_get_cfg - get configuration register value
++ * @chip: SPI-NAND device structure
++ * @cfg: buffer to store value
++ * Description:
++ *   Configuration register includes OTP config, Lock Tight enable/disable
++ *   and Internal ECC enable/disable.
++ */
++static int spi_nand_get_cfg(struct spi_nand_chip *chip, u8 *cfg)
++{
++	return spi_nand_read_reg(chip, REG_CFG, cfg);
++}
++
++/**
++ * spi_nand_set_cfg - set value to configuration register
++ * @chip: SPI-NAND device structure
++ * @cfg: buffer stored value
++ * Description:
++ *   Configuration register includes OTP config, Lock Tight enable/disable
++ *   and Internal ECC enable/disable.
++ */
++static int spi_nand_set_cfg(struct spi_nand_chip *chip, u8 *cfg)
++{
++	return spi_nand_write_reg(chip, REG_CFG, cfg);
++}
++
++/**
++ * spi_nand_set_ds - set value to die select register
++ * @chip: SPI-NAND device structure
++ * @cfg: buffer stored value
++ * Description:
++ *   Configuration register includes OTP config, Lock Tight enable/disable
++ *   and Internal ECC enable/disable.
++ */
++static int spi_nand_set_ds(struct spi_nand_chip *chip, u8 *ds)
++{
++	return spi_nand_write_reg(chip, REG_DIE_SELECT, ds);
++}
++
++/**
++ * spi_nand_lun_select - send die select command if needed
++ * @chip: SPI-NAND device structure
++ * @lun: lun need to access
++ */
++static int spi_nand_lun_select(struct spi_nand_chip *chip, u8 lun)
++{
++	u8 ds = 0;
++	int ret = 0;
++
++	if (chip->lun != lun) {
++		ds = (lun == 1) ? DIE_SELECT_DS1 : DIE_SELECT_DS0;
++		ret = spi_nand_set_ds(chip, &ds);
++		chip->lun = lun;
++	}
++
++	return ret;
++}
++
++/**
++ * spi_nand_enable_ecc - enable internal ECC
++ * @chip: SPI-NAND device structure
++ * Description:
++ *   There is one bit( bit 0x10 ) to set or to clear the internal ECC.
++ *   Enable chip internal ECC, set the bit to 1
++ *   Disable chip internal ECC, clear the bit to 0
++ */
++static int spi_nand_enable_ecc(struct spi_nand_chip *chip)
++{
++	u8 cfg = 0;
++
++	spi_nand_get_cfg(chip, &cfg);
++	if ((cfg & CFG_ECC_MASK) == CFG_ECC_ENABLE)
++		return 0;
++	cfg |= CFG_ECC_ENABLE;
++	return spi_nand_set_cfg(chip, &cfg);
++}
++
++/**
++ * spi_nand_disable_ecc - disable internal ECC
++ * @chip: SPI-NAND device structure
++ * Description:
++ *   There is one bit( bit 0x10 ) to set or to clear the internal ECC.
++ *   Enable chip internal ECC, set the bit to 1
++ *   Disable chip internal ECC, clear the bit to 0
++ */
++static int spi_nand_disable_ecc(struct spi_nand_chip *chip)
++{
++	u8 cfg = 0;
++
++	spi_nand_get_cfg(chip, &cfg);
++	if ((cfg & CFG_ECC_MASK) == CFG_ECC_ENABLE) {
++		cfg &= ~CFG_ECC_ENABLE;
++		return spi_nand_set_cfg(chip, &cfg);
++	}
++	return 0;
++}
++
++/**
++ * spi_nand_ecc_status - decode status regisger to get ecc info
++ * @status: status register value to decode
++ * @corrected: bitflip count that ecc corrected
++ * @ecc_error: uncorrected bitflip happen or not
++ */
++static void spi_nand_ecc_status(unsigned int status,
++					unsigned int *corrected,
++					unsigned int *ecc_error)
++{
++	unsigned int ecc_status = status & SPI_NAND_MT29F_ECC_MASK;
++
++	*ecc_error = (ecc_status == SPI_NAND_MT29F_ECC_UNCORR);
++	switch (ecc_status) {
++	case SPI_NAND_MT29F_ECC_0_BIT:
++		*corrected = 0;
++		break;
++	case SPI_NAND_MT29F_ECC_1_3_BIT:
++		*corrected = 3;
++		break;
++	case SPI_NAND_MT29F_ECC_4_6_BIT:
++		*corrected = 6;
++		break;
++	case SPI_NAND_MT29F_ECC_7_8_BIT:
++		*corrected = 8;
++		break;
++	}
++}
++
++
++/**
++ * spi_nand_write_enable - send command 06h to enable write or erase the
++ * Nand cells
++ * @chip: SPI-NAND device structure
++ * Description:
++ *   Before write and erase the Nand cells, the write enable has to be set.
++ *   After the write or erase, the write enable bit is automatically
++ *   cleared (status register bit 2)
++ *   Set the bit 2 of the status register has the same effect
++ */
++static int spi_nand_write_enable(struct spi_nand_chip *chip)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_WR_ENABLE;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++/**
++ * spi_nand_read_page_to_cache - send command 13h to read data from Nand to cache
++ * @chip: SPI-NAND device structure
++ * @page_addr: page to read
++ */
++static int spi_nand_read_page_to_cache(struct spi_nand_chip *chip,
++					u32 page_addr)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_PAGE_READ;
++	cmd.n_addr = 3;
++	cmd.addr[0] = (u8)(page_addr >> 16);
++	cmd.addr[1] = (u8)(page_addr >> 8);
++	cmd.addr[2] = (u8)page_addr;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++/**
++ * spi_nand_read_from_cache - read data out from cache register
++ * @chip: SPI-NAND device structure
++ * @page_addr: page to read
++ * @column: the location to read from the cache
++ * @len: number of bytes to read
++ * @rbuf: buffer held @len bytes
++ * Description:
++ *   Command can be 03h, 0Bh, 3Bh, 6Bh, BBh, EBh
++ *   The read can specify 1 to (page size + spare size) bytes of data read at
++ *   the corresponding locations.
++ *   No tRd delay.
++ */
++static int spi_nand_read_from_cache(struct spi_nand_chip *chip, u32 page_addr,
++		u32 column, size_t len, u8 *rbuf)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = chip->read_cache_op;
++	cmd.n_addr = 2;
++	cmd.addr[0] = (u8)(column >> 8);
++	if (chip->options & SPINAND_NEED_PLANE_SELECT)
++		cmd.addr[0] |= (u8)(((page_addr >>
++			(chip->block_shift - chip->page_shift)) & 0x1) << 4);
++	cmd.addr[1] = (u8)column;
++	cmd.n_rx = len;
++	cmd.rx_buf = rbuf;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++/**
++ * spi_nand_program_data_to_cache - write data to cache register
++ * @chip: SPI-NAND device structure
++ * @page_addr: page to write
++ * @column: the location to write to the cache
++ * @len: number of bytes to write
++ * @wrbuf: buffer held @len bytes
++ * @clr_cache: clear cache register or not
++ * Description:
++ *   Command can be 02h, 32h, 84h, 34h
++ *   02h and 32h will clear the cache with 0xff value first
++ *   Since it is writing the data to cache, there is no tPROG time.
++ */
++static int spi_nand_program_data_to_cache(struct spi_nand_chip *chip,
++		u32 page_addr, u32 column, size_t len, const u8 *wbuf, bool clr_cache)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	if (clr_cache)
++		cmd.cmd = chip->write_cache_op;
++	else
++		cmd.cmd = chip->write_cache_rdm_op;
++	cmd.n_addr = 2;
++	cmd.addr[0] = (u8)(column >> 8);
++	if (chip->options & SPINAND_NEED_PLANE_SELECT)
++		cmd.addr[0] |= (u8)(((page_addr >>
++			(chip->block_shift - chip->page_shift)) & 0x1) << 4);
++	cmd.addr[1] = (u8)column;
++	cmd.n_tx = len;
++	cmd.tx_buf = wbuf;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++
++/**
++ * spi_nand_program_execute - send command 10h to write a page from
++ * cache to the Nand array
++ * @chip: SPI-NAND device structure
++ * @page_addr: the physical page location to write the page.
++ * Description:
++ *   Need to wait for tPROG time to finish the transaction.
++ */
++static int spi_nand_program_execute(struct spi_nand_chip *chip, u32 page_addr)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_PROG_EXC;
++	cmd.n_addr = 3;
++	cmd.addr[0] = (u8)(page_addr >> 16);
++	cmd.addr[1] = (u8)(page_addr >> 8);
++	cmd.addr[2] = (u8)page_addr;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++
++/**
++ * spi_nand_erase_block_erase - send command D8h to erase a block
++ * @chip: SPI-NAND device structure
++ * @page_addr: the page to erase.
++ * Description:
++ *   Need to wait for tERS.
++ */
++static int spi_nand_erase_block(struct spi_nand_chip *chip,
++					u32 page_addr)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_BLK_ERASE;
++	cmd.n_addr = 3;
++	cmd.addr[0] = (u8)(page_addr >> 16);
++	cmd.addr[1] = (u8)(page_addr >> 8);
++	cmd.addr[2] = (u8)page_addr;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++/**
++ * spi_nand_read_page_cache_random - send command 30h for data read
++ * @chip: SPI-NAND device structure
++ * @page_addr: the page to read to data register.
++ * Description:
++ *   Transfer data from data register to cache register and kick off the other
++ *   page data transferring from array to data register.
++ */
++static int spi_nand_read_page_cache_random(struct spi_nand_chip *chip,
++					u32 page_addr)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_READ_PAGE_CACHE_RDM;
++	cmd.addr[0] = (u8)(page_addr >> 16);
++	cmd.addr[1] = (u8)(page_addr >> 8);
++	cmd.addr[2] = (u8)page_addr;
++	cmd.n_addr = 3;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++/**
++ * spi_nand_read_page_cache_last - send command 3Fh to end
++ * READ PAGE CACHE RANDOM(30h) sequence
++ * @chip: SPI-NAND device structure
++ * Description:
++ *   End the READ PAGE CACHE RANDOM sequence and copies a page from
++ *   the data register to the cache register.
++ */
++static int spi_nand_read_page_cache_last(struct spi_nand_chip *chip)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_READ_PAGE_CACHE_LAST;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++/**
++ * spi_nand_wait - wait until the command is done
++ * @chip: SPI-NAND device structure
++ * @s: buffer to store status register(can be NULL)
++ */
++static int spi_nand_wait(struct spi_nand_chip *chip, u8 *s)
++{
++	unsigned long long start = get_timer(0);;
++	u8 status;
++	/* set timeout to 1 second */
++	int timeout = start + CONFIG_SYS_HZ;
++	unsigned long ret = -ETIMEDOUT;
++	int count = 0;
++
++	while (get_timer(start) < timeout || count < MIN_TRY_COUNT) {
++		spi_nand_read_status(chip, &status);
++		if ((status & STATUS_OIP_MASK) == STATUS_READY) {
++			ret = 0;
++			goto out;
++		}
++		count++;
++	}
++out:
++	if (s)
++		*s = status;
++
++	return ret;
++}
++
++/**
++ * spi_nand_wait_crbusy - wait until CRBSY is clear
++ * @chip: SPI-NAND device structure
++ * Description:
++ *   Used in READ PAGE CACHE RANDOM(30h) sequence, CRBSY bit clear
++ *   means data is transferd from data register to cache register.
++ */
++static int spi_nand_wait_crbusy(struct spi_nand_chip *chip)
++{
++	unsigned long long start = get_timer(0);;
++	u8 status;
++	/* set timeout to 1 second */
++	int timeout = start + CONFIG_SYS_HZ;
++	unsigned long ret = -ETIMEDOUT;
++	int count = 0;
++
++	while (get_timer(start) < timeout || count < MIN_TRY_COUNT) {
++		spi_nand_read_status(chip, &status);
++		if ((status & STATUS_CRBSY_MASK) == STATUS_READY) {
++			ret = 0;
++			goto out;
++		}
++		count++;
++	}
++out:
++	return ret;
++}
++
++/**
++ * spi_nand_read_id - send 9Fh command to get ID
++ * @chip: SPI-NAND device structure
++ * @buf: buffer to store id
++ */
++static int spi_nand_read_id(struct spi_nand_chip *chip, u8 *buf)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_READ_ID;
++	cmd.n_rx = 2;
++	cmd.rx_buf = buf;
++
++	return spi_nand_issue_cmd(chip, &cmd);
++}
++
++/**
++ * spi_nand_reset - send command FFh to reset chip.
++ * @chip: SPI-NAND device structure
++ */
++static int spi_nand_reset(struct spi_nand_chip *chip)
++{
++	struct spi_nand_cmd cmd;
++
++	memset(&cmd, 0, sizeof(struct spi_nand_cmd));
++	cmd.cmd = SPINAND_CMD_RESET;
++
++	if (spi_nand_issue_cmd(chip, &cmd) < 0)
++		spi_nand_error("spi_nand reset failed!\n");
++
++	/* elapse 2ms before issuing any other command */
++	udelay(2000);
++
++	return 0;
++}
++
++/**
++ * spi_nand_lock_block - write block lock register to
++ * lock/unlock device
++ * @spi: spi device structure
++ * @lock: value to set to block lock register
++ * Description:
++ *   After power up, all the Nand blocks are locked.  This function allows
++ *   one to unlock the blocks, and so it can be written or erased.
++ */
++static int spi_nand_lock_block(struct spi_nand_chip *chip, u8 lock)
++{
++	return spi_nand_write_reg(chip, REG_BLOCK_LOCK, &lock);
++}
++
++/**
++ * spi_nand_change_mode - switch chip to OTP/OTP protect/Normal mode
++ * @chip: SPI-NAND device structure
++ * @mode: mode to enter
++ */
++static int spi_nand_change_mode(struct spi_nand_chip *chip, u8 mode)
++{
++	u8 cfg;
++
++	spi_nand_get_cfg(chip, &cfg);
++	switch (mode) {
++	case OTP_MODE:
++		cfg = (cfg & ~CFG_OTP_MASK) | CFG_OTP_ENTER;
++		break;
++	case NORMAL_MODE:
++		cfg = (cfg & ~CFG_OTP_MASK) | CFG_OTP_EXIT;
++		break;
++	}
++	spi_nand_set_cfg(chip, &cfg);
++
++	return 0;
++}
++
++/**
++ * spi_nand_do_read_page - read page from flash to buffer
++ * @chip: spi nand chip structure
++ * @page_addr: page address/raw address
++ * @column: column address
++ * @ecc_off: without ecc or not
++ * @corrected: how many bit error corrected
++ * @buf: data buffer
++ * @len: data length to read
++ * Description:
++ *   Return -EBADMSG when internal ecc can not correct bitflips.
++ *   The command sequence to transfer data from NAND array to output is
++ *   follows:
++ *      13h (PAGE READ to cache register)
++ *      0Fh (GET FEATURES command to read the status)
++ *      0Bh/03h/3Bh/6Bh (Read from Cache Xn); or BBh/EBh (Read From
++ *      Cache Dual/Quad IO)
++ */
++static int spi_nand_do_read_page(struct spi_nand_chip *chip, u32 page_addr,
++				u32 column, bool ecc_off, unsigned int *corrected, u_char *buf, size_t len)
++{
++	int ret;
++	unsigned int ecc_error;
++	u8 status;
++
++	spi_nand_read_page_to_cache(chip, page_addr);
++	ret = spi_nand_wait(chip, &status);
++	if (ret < 0) {
++		spi_nand_error("error %d waiting page 0x%x to cache\n",
++			ret, page_addr);
++		return ret;
++	}
++	if (!ecc_off) {
++		spi_nand_ecc_status(status, corrected, &ecc_error);
++		if (ecc_error) {
++			spi_nand_error("internal ECC error reading page 0x%x\n",
++				page_addr);
++			ret = -EBADMSG;
++		}
++	}
++	spi_nand_read_from_cache(chip, page_addr, column, len, buf);
++
++	return ret;
++}
++
++/**
++ * spi_nand_do_write_page - write data from buffer to flash
++ * @chip: spi nand chip structure
++ * @page_addr: page address/raw address
++ * @column: column address
++ * @buf: data buffer
++ * @len: data length to write
++ * @clr_cache: clear cache register with 0xFF or not
++ * Description:
++ *   Page program sequence is as follows:
++ *       06h (WRITE ENABLE)
++ *       02h/32h/84h/34h (PROGRAM LOAD (RAMDOM_DATA) Xn)
++ *       10h (PROGRAM EXECUTE)
++ *       0Fh (GET FEATURE command to read the status)
++ *   PROGRAM LOAD Xn instruction will reset the cache resigter with 0xFF,
++ *   while PROGRAM LOAD RANDOM DATA Xn instruction will only update the
++ *   data bytes that are specified by the command input sequence and the rest
++ *   of data in the cache buffer will remain unchanged.
++ */
++static int spi_nand_do_write_page(struct spi_nand_chip *chip, u32 page_addr,
++				u32 column, const u_char *buf, size_t len, bool clr_cache)
++{
++	u8 status;
++	bool p_fail = false;
++	int ret = 0;
++
++	spi_nand_write_enable(chip);
++	spi_nand_program_data_to_cache(chip, page_addr,
++					column, len, buf, clr_cache);
++	spi_nand_program_execute(chip, page_addr);
++	ret = spi_nand_wait(chip, &status);
++	if (ret < 0) {
++		spi_nand_error("error %d reading page 0x%x from cache\n",
++			ret, page_addr);
++		return ret;
++	}
++	if ((status & STATUS_P_FAIL_MASK) == STATUS_P_FAIL) {
++		spi_nand_error("program page 0x%x failed\n", page_addr);
++		p_fail = true;
++	}
++	if (p_fail)
++		ret = -EIO;
++
++	return ret;
++}
++
++/**
++ * spi_nand_transfer_oob - transfer oob to client buffer
++ * @chip: SPI-NAND device structure
++ * @oob: oob destination address
++ * @ops: oob ops structure
++ * @len: size of oob to transfer
++ */
++static void spi_nand_transfer_oob(struct spi_nand_chip *chip, u8 *oob,
++				  struct mtd_oob_ops *ops, size_t len)
++{
++	switch (ops->mode) {
++
++	case MTD_OPS_PLACE_OOB:
++	case MTD_OPS_RAW:
++		memcpy(oob, chip->oobbuf + ops->ooboffs, len);
++		return;
++
++	case MTD_OPS_AUTO_OOB: {
++		struct nand_oobfree *free = chip->ecclayout->oobfree;
++		uint32_t boffs = 0, roffs = ops->ooboffs;
++		size_t bytes = 0;
++
++		for (; free->length && len; free++, len -= bytes) {
++			/* Read request not from offset 0? */
++			if (unlikely(roffs)) {
++				if (roffs >= free->length) {
++					roffs -= free->length;
++					continue;
++				}
++				boffs = free->offset + roffs;
++				bytes = min_t(size_t, len,
++					      (free->length - roffs));
++				roffs = 0;
++			} else {
++				bytes = min_t(size_t, len, free->length);
++				boffs = free->offset;
++			}
++			memcpy(oob, chip->oobbuf + boffs, bytes);
++			oob += bytes;
++		}
++		return;
++	}
++	default:
++		BUG();
++	}
++}
++
++/**
++ * spi_nand_fill_oob - transfer client buffer to oob
++ * @chip: SPI-NAND device structure
++ * @oob: oob data buffer
++ * @len: oob data write length
++ * @ops: oob ops structure
++ */
++static void spi_nand_fill_oob(struct spi_nand_chip *chip, uint8_t *oob,
++				size_t len, struct mtd_oob_ops *ops)
++{
++	memset(chip->oobbuf, 0xff, chip->oob_size);
++
++	switch (ops->mode) {
++
++	case MTD_OPS_PLACE_OOB:
++	case MTD_OPS_RAW:
++		memcpy(chip->oobbuf + ops->ooboffs, oob, len);
++		return;
++
++	case MTD_OPS_AUTO_OOB: {
++		struct nand_oobfree *free = chip->ecclayout->oobfree;
++		uint32_t boffs = 0, woffs = ops->ooboffs;
++		size_t bytes = 0;
++
++		for (; free->length && len; free++, len -= bytes) {
++			/* Write request not from offset 0? */
++			if (unlikely(woffs)) {
++				if (woffs >= free->length) {
++					woffs -= free->length;
++					continue;
++				}
++				boffs = free->offset + woffs;
++				bytes = min_t(size_t, len,
++					      (free->length - woffs));
++				woffs = 0;
++			} else {
++				bytes = min_t(size_t, len, free->length);
++				boffs = free->offset;
++			}
++			memcpy(chip->oobbuf + boffs, oob, bytes);
++			oob += bytes;
++		}
++		return;
++	}
++	default:
++		BUG();
++	}
++}
++
++/**
++ * spi_nand_read_pages - read data from flash to buffer
++ * @chip: spi nand chip structure
++ * @from: offset to read from
++ * @ops: oob operations description structure
++ * Description:
++ *   Normal read function, read one page to buffer before issue
++ *   another. Return -EUCLEAN when bitflip is over threshold.
++ *   Return -EBADMSG when internal ecc can not correct bitflips.
++ */
++static int spi_nand_read_pages(struct spi_nand_chip *chip,
++			loff_t from, struct mtd_oob_ops *ops)
++{
++	int page_addr, page_offset, size;
++	int ret;
++	unsigned int corrected = 0;
++	unsigned int max_bitflip = 0;
++	int readlen = ops->len;
++	int oobreadlen = ops->ooblen;
++	bool ecc_off = ops->mode == MTD_OPS_RAW;
++	int ooblen = (ops->mode == MTD_OPS_AUTO_OOB) ? chip->ecclayout->oobavail : chip->oob_size;
++	unsigned int failed = 0;
++	int lun_num;
++
++	spi_nand_debug("%s: from = 0x%012llx, len = %i\n",
++			 __func__, from, readlen);
++
++	page_addr = from >> chip->page_shift;
++	page_offset = from & chip->page_mask;
++	lun_num = from >> chip->lun_shift;
++	ops->retlen = 0;
++	if (chip->options & SPINAND_NEED_DIE_SELECT)
++		spi_nand_lun_select(chip, lun_num);
++
++	while (1) {
++		size = min(readlen, chip->page_size - page_offset);
++		ret = spi_nand_do_read_page(chip, page_addr, page_offset,
++					ecc_off, &corrected, ops->datbuf + ops->retlen, size);
++		if (ret == -EBADMSG)
++			failed++;
++		else if (ret) {
++			spi_nand_error("error %d reading page 0x%x\n",
++				ret, page_addr);
++			goto out;
++		}
++		max_bitflip = max(corrected, max_bitflip);
++
++		ops->retlen += size;
++		readlen -= size;
++		page_offset = 0;
++
++		if (unlikely(ops->oobbuf)) {
++			size = min(oobreadlen, ooblen);
++			spi_nand_read_from_cache(chip, page_addr,
++				chip->page_size, chip->oob_size, chip->oobbuf);
++			spi_nand_transfer_oob(chip,
++				ops->oobbuf + ops->oobretlen, ops, size);
++			ops->oobretlen += size;
++			oobreadlen -= size;
++		}
++		if (!readlen)
++			break;
++
++		page_addr++;
++		/* Check, if we cross lun boundary */
++		if (!(page_addr & ((1 << (chip->lun_shift - chip->page_shift)) - 1))
++			&& (chip->options & SPINAND_NEED_DIE_SELECT)) {
++			lun_num++;
++			spi_nand_lun_select(chip, lun_num);
++		}
++	}
++out:
++	if (max_bitflip >= chip->refresh_threshold)
++		ret = -EUCLEAN;
++	if (failed)
++		ret = -EBADMSG;
++
++	return ret;
++}
++
++/**
++ * spi_nand_read_pages_fast - read data from flash to buffer
++ * @chip: spi nand chip structure
++ * @from: offset to read from
++ * @ops: oob operations description structure
++ * Description:
++ *   Advanced read function, use READ PAGE CACHE RANDOM to
++ *   speed up read. Return -EUCLEAN when bitflip is over threshold.
++ *   Return -EBADMSG when internal ecc can not correct bitflips.
++ */
++static int spi_nand_read_pages_fast(struct spi_nand_chip *chip,
++			loff_t from, struct mtd_oob_ops *ops)
++{
++	int page_addr, page_offset, size;
++	int ret;
++	unsigned int corrected = 0;
++	unsigned int max_bitflip = 0;
++	int readlen = ops->len;
++	int oobreadlen = ops->ooblen;
++	bool ecc_off = ops->mode == MTD_OPS_RAW, cross_lun = false;
++	bool read_ramdon_issued = false;
++	int ooblen = (ops->mode == MTD_OPS_AUTO_OOB) ? chip->ecclayout->oobavail : chip->oob_size;
++	u8 status;
++	unsigned int ecc_error;
++	unsigned int failed = 0;
++	int lun_num;
++
++	page_addr = from >> chip->page_shift;
++	page_offset = from & chip->page_mask;
++	ops->retlen = 0;
++	lun_num = from >> chip->lun_shift;
++again:
++	if (chip->options & SPINAND_NEED_DIE_SELECT)
++		spi_nand_lun_select(chip, lun_num);
++
++	spi_nand_read_page_to_cache(chip, page_addr);
++	ret = spi_nand_wait(chip, &status);
++	if (ret < 0) {
++		spi_nand_error("error %d waiting page 0x%x to cache\n",
++			ret, page_addr);
++		return ret;
++	}
++	while ((page_offset + readlen > chip->page_size) && !cross_lun) {
++		if (!(chip->options & SPINAND_NEED_DIE_SELECT) ||
++		(page_addr + 1) & ((1 << (chip->lun_shift - chip->page_shift)) - 1)) {
++			read_ramdon_issued = true;
++			spi_nand_read_page_cache_random(chip, page_addr + 1);
++			ret = spi_nand_wait(chip, &status);
++			if (ret < 0) {
++				spi_nand_error("error %d waiting page 0x%x to data resigter\n",
++					ret, page_addr + 1);
++				return ret;
++			}
++		} else {
++			cross_lun = true;
++			break;
++		}
++		if (!ecc_off) {
++			spi_nand_ecc_status(status, &corrected, &ecc_error);
++			if (ecc_error) {
++				spi_nand_error("internal ECC error reading page 0x%x\n",
++					page_addr);
++				failed++;
++			}
++		}
++		max_bitflip = max(corrected, max_bitflip);
++		size = min(readlen, chip->page_size - page_offset);
++		spi_nand_read_from_cache(chip, page_addr, page_offset, size,
++				ops->datbuf + ops->retlen);
++		page_offset = 0;
++		ops->retlen += size;
++		readlen -= size;
++		if (unlikely(ops->oobbuf)) {
++			size = min(oobreadlen, ooblen);
++			spi_nand_read_from_cache(chip, page_addr,
++				chip->page_size, chip->oob_size, chip->oobbuf);
++			spi_nand_transfer_oob(chip,
++				ops->oobbuf + ops->oobretlen, ops, size);
++			ops->oobretlen += size;
++			oobreadlen -= size;
++		}
++		if (!cross_lun) {
++			ret = spi_nand_wait_crbusy(chip);
++			if (ret < 0) {
++				spi_nand_error("error %d waiting page 0x%x to cache\n",
++					ret, page_addr + 1);
++				return ret;
++			}
++		}
++		page_addr++;
++	}
++	if (read_ramdon_issued) {
++		read_ramdon_issued = false;
++		spi_nand_read_page_cache_last(chip);
++		/*
++		* Already check ecc status in loop, no need to check again
++		*/
++		ret = spi_nand_wait(chip, &status);
++		if (ret < 0) {
++			spi_nand_error("error %d waiting page 0x%x to cache\n",
++				ret, page_addr);
++			return ret;
++		}
++	}
++	if (!ecc_off) {
++		spi_nand_ecc_status(status, &corrected, &ecc_error);
++		if (ecc_error) {
++			spi_nand_error("internal ECC error reading page 0x%x\n",
++				page_addr);
++			failed++;
++		}
++	}
++	max_bitflip = max(corrected, max_bitflip);
++	size = min(readlen, chip->page_size - page_offset);
++	spi_nand_read_from_cache(chip, page_addr, page_offset, size,
++			ops->datbuf + ops->retlen);
++	ops->retlen += size;
++	readlen -= size;
++	if (unlikely(ops->oobbuf)) {
++		size = min(oobreadlen, ooblen);
++		spi_nand_read_from_cache(chip, page_addr,
++			chip->page_size, chip->oob_size, chip->oobbuf);
++		spi_nand_transfer_oob(chip,
++			ops->oobbuf + ops->oobretlen, ops, size);
++		ops->oobretlen += size;
++		oobreadlen -= size;
++	}
++	if (cross_lun) {
++		cross_lun = false;
++		page_addr++;
++		page_offset = 0;
++		lun_num++;
++		goto again;
++	}
++	if (max_bitflip >= chip->refresh_threshold)
++		ret = -EUCLEAN;
++	if (failed)
++		ret = -EBADMSG;
++
++	return ret;
++}
++
++static inline bool is_read_page_fast_benefit(struct spi_nand_chip *chip,
++			loff_t from, size_t len)
++{
++	if (len < chip->page_size << 2)
++		return false;
++	if (from >> chip->lun_shift == (from + len) >> chip->lun_shift)
++		return true;
++	if (((1 << chip->lun_shift) - from) >= (chip->page_size << 2) ||
++		(from + len - (1 << chip->lun_shift)) >= (chip->page_size << 2))
++		return true;
++	return false;
++}
++
++/**
++ * spi_nand_do_read_ops - read data from flash to buffer
++ * @chip: spi nand device structure
++ * @from: offset to read from
++ * @ops: oob ops structure
++ * Description:
++ *   Disable internal ECC before reading when MTD_OPS_RAW set.
++ */
++static int spi_nand_do_read_ops(struct spi_nand_chip *chip, loff_t from,
++			  struct mtd_oob_ops *ops)
++{
++	int ret;
++	int oobreadlen = ops->ooblen;
++	bool ecc_off = ops->mode == MTD_OPS_RAW;
++	int ooblen = (ops->mode == MTD_OPS_AUTO_OOB) ?
++		chip->ecclayout->oobavail : chip->oob_size;
++
++	spi_nand_debug("%s: from = 0x%012llx, len = %i\n",
++			 __func__, from, ops->len);
++	/* Do not allow reads past end of device */
++	if (unlikely(from >= chip->size)) {
++		spi_nand_error("%s: attempt to read beyond end of device\n",
++				__func__);
++		return -EINVAL;
++	}
++
++	/* for oob */
++	if (oobreadlen > 0) {
++		if (unlikely(ops->ooboffs >= ooblen)) {
++			spi_nand_error("%s: attempt to start read outside oob\n",
++					__func__);
++			return -EINVAL;
++		}
++
++		if (unlikely(ops->ooboffs + oobreadlen >
++		((chip->size >> chip->page_shift) - (from >> chip->page_shift))
++		* ooblen)) {
++			spi_nand_error("%s: attempt to read beyond end of device\n",
++					__func__);
++			return -EINVAL;
++		}
++		ooblen -= ops->ooboffs;
++		ops->oobretlen = 0;
++	}
++
++	if (ecc_off)
++		spi_nand_disable_ecc(chip);
++
++	if (is_read_page_fast_benefit(chip, from, ops->len))
++		ret = spi_nand_read_pages_fast(chip, from, ops);
++	else
++		ret = spi_nand_read_pages(chip, from, ops);
++
++	if (ecc_off)
++		spi_nand_enable_ecc(chip);
++
++	return ret;
++}
++
++/**
++ * spi_nand_do_write_ops - write data from buffer to flash
++ * @chip: spi nand device structure
++ * @to: offset to write to
++ * @ops: oob operations description structure
++ * Description:
++ *   Disable internal ECC before writing when MTD_OPS_RAW set.
++ */
++static int spi_nand_do_write_ops(struct spi_nand_chip *chip, loff_t to,
++			 struct mtd_oob_ops *ops)
++{
++	int page_addr, page_offset, size;
++	int writelen = ops->len;
++	int oobwritelen = ops->ooblen;
++	int ret = 0;
++	int ooblen = (ops->mode == MTD_OPS_AUTO_OOB) ?
++		chip->ecclayout->oobavail : chip->oob_size;
++	bool ecc_off = ops->mode == MTD_OPS_RAW;
++	bool clr_cache = true;
++	int lun_num;
++
++
++	spi_nand_debug("%s: to = 0x%012llx, len = %i\n",
++			 __func__, to, writelen);
++	/* Do not allow reads past end of device */
++	if (unlikely(to >= chip->size)) {
++		spi_nand_error("%s: attempt to write beyond end of device\n",
++				__func__);
++		return -EINVAL;
++	}
++
++	page_addr = to >> chip->page_shift;
++	page_offset = to & chip->page_mask;
++	lun_num = to >> chip->lun_shift;
++	ops->retlen = 0;
++
++	/* for oob */
++	if (oobwritelen > 0) {
++		if (unlikely(ops->ooboffs >= ooblen)) {
++			spi_nand_error("%s: attempt to start write outside oob\n",
++					__func__);
++			return -EINVAL;
++		}
++		if (unlikely(ops->ooboffs + oobwritelen >
++		((chip->size >> chip->page_shift) - (to >> chip->page_shift))
++			* ooblen)) {
++			spi_nand_error("%s: attempt to write beyond end of device\n",
++					__func__);
++			return -EINVAL;
++		}
++		ooblen -= ops->ooboffs;
++		ops->oobretlen = 0;
++	}
++	if (chip->options & SPINAND_NEED_DIE_SELECT)
++		spi_nand_lun_select(chip, lun_num);
++
++	if (ecc_off)
++		spi_nand_disable_ecc(chip);
++
++	while (1) {
++		if (unlikely(ops->oobbuf)) {
++			size = min(oobwritelen, ooblen);
++
++			spi_nand_fill_oob(chip, ops->oobbuf + ops->oobretlen,
++					size, ops);
++			ret = spi_nand_program_data_to_cache(chip, page_addr,
++			chip->page_size, chip->oob_size, chip->oobbuf, true);
++			if (ret) {
++				spi_nand_error("error %d store page oob to cache 0x%x\n",
++					ret, page_addr);
++				goto out;
++			}
++			clr_cache = false;
++			ops->oobretlen += size;
++			oobwritelen -= size;
++		}
++		size = min(writelen, chip->page_size - page_offset);
++		ret = spi_nand_do_write_page(chip, page_addr, page_offset,
++				ops->datbuf + ops->retlen, size, clr_cache);
++		if (ret) {
++			spi_nand_error("error %d writing page 0x%x\n",
++				ret, page_addr);
++			goto out;
++		}
++		ops->retlen += size;
++		writelen -= size;
++		page_offset = 0;
++		if (!writelen)
++			break;
++		page_addr++;
++		/* Check, if we cross lun boundary */
++		if (!(page_addr & ((1 << (chip->lun_shift - chip->page_shift)) - 1))
++			&& (chip->options & SPINAND_NEED_DIE_SELECT)) {
++			lun_num++;
++			spi_nand_lun_select(chip, lun_num);
++		}
++	}
++out:
++	if (ecc_off)
++		spi_nand_enable_ecc(chip);
++
++	return ret;
++}
++
++/**
++ * spi_nand_read - [Interface] SPI-NAND read
++ * @chip: spi nand device structure
++ * @from: offset to read from
++ * @len: number of bytes to read
++ * @retlen: pointer to variable to store the number of read bytes
++ * @buf: the databuffer to put data
++ */
++static int spi_nand_read(struct spi_nand_chip *chip, loff_t from, size_t len,
++	size_t *retlen, u8 *buf)
++{
++	struct mtd_oob_ops ops;
++	int ret;
++
++	memset(&ops, 0, sizeof(ops));
++	ops.len = len;
++	ops.datbuf = buf;
++	ops.mode = MTD_OPS_PLACE_OOB;
++	ret = spi_nand_do_read_ops(chip, from, &ops);
++
++	*retlen = ops.retlen;
++
++	return ret;
++}
++
++/**
++ * spi_nand_write - [Interface] SPI-NAND write
++ * @chip: spi nand device structure
++ * @to: offset to write to
++ * @len: number of bytes to write
++ * @retlen: pointer to variable to store the number of written bytes
++ * @buf: the data to write
++ */
++static int spi_nand_write(struct spi_nand_chip *chip, loff_t to, size_t len,
++	size_t *retlen, const u8 *buf)
++{
++	struct mtd_oob_ops ops;
++	int ret;
++
++	memset(&ops, 0, sizeof(ops));
++	ops.len = len;
++	ops.datbuf = (uint8_t *)buf;
++	ops.mode = MTD_OPS_PLACE_OOB;
++	ret =  spi_nand_do_write_ops(chip, to, &ops);
++
++	*retlen = ops.retlen;
++
++	return ret;
++}
++
++/**
++ * spi_nand_do_read_oob - read out-of-band
++ * @chip: spi nand device structure
++ * @from: offset to read from
++ * @ops: oob operations description structure
++ * Description:
++ *   Disable internal ECC before reading when MTD_OPS_RAW set.
++ */
++static int spi_nand_do_read_oob(struct spi_nand_chip *chip, loff_t from,
++			  struct mtd_oob_ops *ops)
++{
++	int page_addr;
++	unsigned int corrected = 0;
++	int readlen = ops->ooblen;
++	int max_len = (ops->mode == MTD_OPS_AUTO_OOB) ?
++		chip->ecclayout->oobavail : chip->oob_size;
++	int ooboffs = ops->ooboffs;
++	bool ecc_off = ops->mode == MTD_OPS_RAW;
++	unsigned int failed = 0;
++	int ret = 0;
++	int lun_num;
++
++	spi_nand_debug("%s: from = 0x%012llx, len = %i\n",
++			 __func__, from, readlen);
++	if (unlikely(ooboffs >= max_len)) {
++		spi_nand_error("%s: attempt to read outside oob\n",
++				__func__);
++		return -EINVAL;
++	}
++	if (unlikely(from >= chip->size ||
++		ooboffs + readlen > ((chip->size >> chip->page_shift) -
++							(from >> chip->page_shift)) * max_len)) {
++		spi_nand_error("%s: attempt to read beyond end of device\n",
++				__func__);
++		return -EINVAL;
++	}
++
++	/* Shift to get page */
++	page_addr = (from >> chip->page_shift);
++	lun_num = from >> chip->lun_shift;
++	max_len -= ooboffs;
++	ops->oobretlen = 0;
++	if (chip->options & SPINAND_NEED_DIE_SELECT)
++		spi_nand_lun_select(chip, lun_num);
++
++	if (ecc_off)
++		spi_nand_disable_ecc(chip);
++
++	while (1) {
++		/*read data from chip*/
++		ret = spi_nand_do_read_page(chip, page_addr, chip->page_size,
++				ecc_off, &corrected, chip->oobbuf, chip->oob_size);
++		if (ret == -EBADMSG)
++			failed++;
++		else if (ret) {
++			spi_nand_error("error %d reading page 0x%x\n",
++				ret, page_addr);
++			goto out;
++		}
++
++		max_len = min(max_len, readlen);
++		spi_nand_transfer_oob(chip, ops->oobbuf + ops->oobretlen,
++					ops, max_len);
++
++		readlen -= max_len;
++		ops->oobretlen += max_len;
++		if (!readlen)
++			break;
++
++		page_addr++;
++		/* Check, if we cross lun boundary */
++		if (!(page_addr & ((1 << (chip->lun_shift - chip->page_shift)) - 1))
++			&& (chip->options & SPINAND_NEED_DIE_SELECT)) {
++			lun_num++;
++			spi_nand_lun_select(chip, lun_num);
++		}
++	}
++out:
++	if (ecc_off)
++		spi_nand_enable_ecc(chip);
++	if (failed)
++		ret = -EBADMSG;
++
++	return ret;
++}
++
++/**
++ * spi_nand_do_write_oob - write out-of-band
++ * @chip: spi nand device structure
++ * @to: offset to write to
++ * @ops: oob operation description structure
++ * Description:
++ *   Disable internal ECC before writing when MTD_OPS_RAW set.
++ */
++static int spi_nand_do_write_oob(struct spi_nand_chip *chip, loff_t to,
++			     struct mtd_oob_ops *ops)
++{
++	int ret = 0;
++	int page_addr, max_len = (ops->mode == MTD_OPS_AUTO_OOB) ?
++		chip->ecclayout->oobavail : chip->oob_size;
++	int ooboffs = ops->ooboffs;
++	bool ecc_off = ops->mode == MTD_OPS_RAW;
++	int writelen = ops->ooblen;
++	int lun_num;
++
++	spi_nand_debug("%s: to = 0x%012llx, len = %i\n",
++			 __func__, to, writelen);
++
++	/* Do not allow write past end of page */
++	if (unlikely(ooboffs > max_len)) {
++		spi_nand_error("%s: attempt to write outside oob\n",
++				__func__);
++		return -EINVAL;
++	}
++	if (unlikely(to >= chip->size ||
++		ooboffs + writelen > ((chip->size >> chip->page_shift) -
++							(to >> chip->page_shift)) * max_len)) {
++		spi_nand_error("%s: attempt to write beyond end of device\n",
++				__func__);
++		return -EINVAL;
++	}
++
++	/* Shift to get page */
++	page_addr = to >> chip->page_shift;
++	lun_num = to >> chip->lun_shift;
++	max_len -= ooboffs;
++	ops->oobretlen = 0;
++
++	if (chip->options & SPINAND_NEED_DIE_SELECT)
++		spi_nand_lun_select(chip, lun_num);
++	if (ecc_off)
++		spi_nand_disable_ecc(chip);
++
++	while (1) {
++		max_len = min(max_len, writelen);
++		spi_nand_fill_oob(chip, ops->oobbuf + ops->oobretlen, max_len, ops);
++
++		ret = spi_nand_do_write_page(chip, page_addr, chip->page_size,
++					chip->oobbuf, chip->oob_size, true);
++		if (ret) {
++			spi_nand_error("error %d writing page 0x%x\n",
++				ret, page_addr);
++			goto out;
++		}
++
++		writelen -= max_len;
++		ops->oobretlen += max_len;
++		if (!writelen)
++			break;
++
++		page_addr++;
++		/* Check, if we cross lun boundary */
++		if (!(page_addr & ((1 << (chip->lun_shift - chip->page_shift)) - 1))
++			&& (chip->options & SPINAND_NEED_DIE_SELECT)) {
++			lun_num++;
++			spi_nand_lun_select(chip, lun_num);
++		}
++	}
++out:
++	if (ecc_off)
++		spi_nand_enable_ecc(chip);
++
++	return ret;
++}
++
++/**
++ * spi_nand_read_oob - [Interface] SPI-NAND read data and/or out-of-band
++ * @chip: spi nand device structure
++ * @from: offset to read from
++ * @ops: oob operation description structure
++ */
++static int spi_nand_read_oob(struct spi_nand_chip *chip, loff_t from,
++			struct mtd_oob_ops *ops)
++{
++	int ret = -ENOTSUPP;
++
++	ops->retlen = 0;
++
++	/* Do not allow reads past end of device */
++	if (ops->datbuf && (from + ops->len) > chip->size) {
++		spi_nand_error("%s: attempt to read beyond end of device\n",
++				__func__);
++		return -EINVAL;
++	}
++
++	switch (ops->mode) {
++	case MTD_OPS_PLACE_OOB:
++	case MTD_OPS_AUTO_OOB:
++	case MTD_OPS_RAW:
++		break;
++
++	default:
++		goto out;
++	}
++
++	if (!ops->datbuf)
++		ret = spi_nand_do_read_oob(chip, from, ops);
++	else
++		ret = spi_nand_do_read_ops(chip, from, ops);
++
++out:
++	return ret;
++}
++
++/**
++ * spi_nand_write_oob - [Interface] SPI-NAND write data and/or out-of-band
++ * @chip: spi nand device structure
++ * @to: offset to write to
++ * @ops: oob operation description structure
++ */
++static int spi_nand_write_oob(struct spi_nand_chip *chip, loff_t to,
++			  struct mtd_oob_ops *ops)
++{
++	int ret = -ENOTSUPP;
++
++	ops->retlen = 0;
++
++	/* Do not allow writes past end of device */
++	if (ops->datbuf && (to + ops->len) > chip->size) {
++		spi_nand_error("%s: attempt to write beyond end of device\n",
++				__func__);
++		return -EINVAL;
++	}
++
++	switch (ops->mode) {
++	case MTD_OPS_PLACE_OOB:
++	case MTD_OPS_AUTO_OOB:
++	case MTD_OPS_RAW:
++		break;
++
++	default:
++		goto out;
++	}
++
++	if (!ops->datbuf)
++		ret = spi_nand_do_write_oob(chip, to, ops);
++	else
++		ret = spi_nand_do_write_ops(chip, to, ops);
++
++out:
++	return ret;
++}
++
++/**
++ * spi_nand_block_isbad - [Interface] check block is bad or not via read
++ * bad block mark(the first two byte in oob area of the first page in the block)
++ * @chip: spi nand device structure
++ * @offs: offset from device start
++ * Description:
++ *   For a block, read the first page's first two byte of oob data, if data is all
++ *   0xFF, the block is a good block, otherwise it a bad block.
++ */
++int spi_nand_block_isbad(struct spi_nand_chip *chip, loff_t offs)
++{
++	struct mtd_oob_ops ops = {0};
++	u32 block_addr;
++	u8 bad[2] = {0, 0};
++	u8 ret = 0;
++
++	block_addr = offs >> chip->block_shift;
++	ops.mode = MTD_OPS_PLACE_OOB;
++	ops.ooblen = 2;
++	ops.oobbuf = bad;
++
++	spi_nand_do_read_oob(chip, block_addr << chip->block_shift, &ops);
++	if (bad[0] != 0xFF || bad[1] != 0xFF)
++		ret =  1;
++
++	return ret;
++}
++
++/**
++ * spi_nand_block_markbad - [Interface] Mark a block as bad block
++ * @chip: spi nand device structure
++ * @offs: offset from device start
++ * Description:
++ *   For a block, bad block mark is the first page's first two byte of oob data,
++ *   Write 0x0 to the area if we want to mark bad block.
++ *   It is unnecessary to write the mark if the block has already marked as bad
++ *   block.
++ */
++int spi_nand_block_markbad(struct spi_nand_chip *chip, loff_t offs)
++{
++	int ret;
++	u32 block_addr;
++	struct mtd_oob_ops ops = {0};
++	u8 buf[2] = {0, 0};
++
++	ret = spi_nand_block_isbad(chip, offs);
++	if (ret) {
++		if (ret > 0)
++			return 0;
++		return ret;
++	}
++	block_addr = offs >> chip->block_shift;
++	spi_nand_erase(chip, block_addr << chip->block_shift, chip->block_size);
++	ops.mode = MTD_OPS_PLACE_OOB;
++	ops.ooblen = 2;
++	ops.oobbuf = buf;
++
++	ret = spi_nand_do_write_oob(chip, block_addr << chip->block_shift, &ops);
++
++	return ret;
++}
++
++/**
++ * spi_nand_erase - [Interface] erase block(s)
++ * @chip: spi nand device structure
++ * @addr: address that erase start with, should be blocksize aligned
++ * @len: length that want to be erased, should be blocksize aligned
++ * Description:
++ *   Erase one ore more blocks
++ *   The command sequence for the BLOCK ERASE operation is as follows:
++ *       06h (WRITE ENBALE command)
++ *       D8h (BLOCK ERASE command)
++ *       0Fh (GET FEATURES command to read the status register)
++ */
++static int spi_nand_erase(struct spi_nand_chip *chip, uint64_t addr, uint64_t len)
++{
++	int page_addr, pages_per_block;
++	u8 status;
++	int ret = 0;
++	int lun_num;
++
++	spi_nand_debug("%s: address = 0x%012llx, len = %llu\n",
++			 __func__, addr, len);
++	/* check address align on block boundary */
++	if (addr & (chip->block_size - 1)) {
++		spi_nand_error("%s: Unaligned address\n", __func__);
++		return -EINVAL;
++	}
++
++	if (len & (chip->block_size - 1)) {
++		spi_nand_error("%s: Length not block aligned\n", __func__);
++		return -EINVAL;
++	}
++
++	/* Do not allow erase past end of device */
++	if ((len + addr) > chip->size) {
++		spi_nand_error("%s: Erase past end of device\n", __func__);
++		return -EINVAL;
++	}
++
++	pages_per_block = 1 << (chip->block_shift - chip->page_shift);
++	page_addr = addr >> chip->page_shift;
++	lun_num = addr >> chip->lun_shift;
++
++	if (chip->options & SPINAND_NEED_DIE_SELECT)
++		spi_nand_lun_select(chip, lun_num);
++
++	while (len) {
++		/* Check if we have a bad block, we do not erase bad blocks! */
++		if (spi_nand_block_isbad(chip, ((loff_t) page_addr) <<
++					chip->page_shift)) {
++			spi_nand_error("%s: attempt to erase a bad block at 0x%012llx\n",
++			__func__, ((loff_t) page_addr) << chip->page_shift);
++			goto erase_exit;
++		}
++		spi_nand_write_enable(chip);
++		spi_nand_erase_block(chip, page_addr);
++		ret = spi_nand_wait(chip, &status);
++		if (ret < 0) {
++			spi_nand_error("block erase command wait failed\n");
++			goto erase_exit;
++		}
++		if ((status & STATUS_E_FAIL_MASK) == STATUS_E_FAIL) {
++			spi_nand_error("erase block 0x%012llx failed\n",
++				((loff_t) page_addr) << chip->page_shift);
++			ret = -EIO;
++			goto erase_exit;
++		}
++
++		/* Increment page address and decrement length */
++		len -= (1ULL << chip->block_shift);
++		page_addr += pages_per_block;
++		/* Check, if we cross lun boundary */
++		if (len && !(page_addr &
++			((1 << (chip->lun_shift - chip->page_shift)) - 1))
++			&& (chip->options & SPINAND_NEED_DIE_SELECT)) {
++			lun_num++;
++			spi_nand_lun_select(chip, lun_num);
++		}
++	}
++
++erase_exit:
++	return ret;
++}
++
++static u8 ilog2(unsigned int v)
++{
++	u8 l = 0;
++	while ((1UL << l) < v)
++		l++;
++	return l;
++}
++
++/**
++ * spi_nand_scan_id_table - scan chip info in id table
++ * @chip: SPI-NAND device structure
++ * @id: point to manufacture id and device id
++ * Description:
++ *   If found in id table, config chip with table information.
++ */
++static bool spi_nand_scan_id_table(struct spi_nand_chip *chip, u8 *id)
++{
++	struct spi_nand_flash *type = spi_nand_table;
++
++	for (; type->name; type++) {
++		if (id[0] == type->mfr_id && id[1] == type->dev_id) {
++			chip->name = type->name;
++			chip->size = type->page_size * type->pages_per_blk
++				* type->blks_per_lun * type->luns_per_chip;
++			chip->block_size = type->page_size
++					* type->pages_per_blk;
++			chip->page_size = type->page_size;
++			chip->oob_size = type->oob_size;
++			chip->lun_shift = ilog2(chip->block_size * type->blks_per_lun);
++			chip->ecc_strength = type->ecc_strength;
++			chip->options = type->options;
++
++			return true;
++		}
++	}
++
++	return false;
++}
++
++static u16 onfi_crc16(u16 crc, u8 const *p, size_t len)
++{
++	int i;
++
++	while (len--) {
++		crc ^= *p++ << 8;
++		for (i = 0; i < 8; i++)
++			crc = (crc << 1) ^ ((crc & 0x8000) ? 0x8005 : 0);
++	}
++
++	return crc;
++}
++
++/* Sanitize ONFI strings so we can safely print them */
++static void sanitize_string(char *s, size_t len)
++{
++	int i = len - 1;
++	int j = 0;
++
++	/* Null terminate */
++	s[i--] = 0;
++
++	/* Remove unnecessary space */
++	while (i >= 0 && (s[i] <= ' ' || s[i] > 127)) {
++		s[i--] = 0;
++	}
++	/* Remove non printable chars */
++	for (j = 0; j <= i; j++) {
++		if (s[j] < ' ' || s[j] > 127)
++			s[j] = '?';
++	}
++}
++
++/**
++ * spi_nand_detect_onfi - config chip with parameter page
++ * @chip: SPI-NAND device structure
++ * Description:
++ *   This function is called when we can not get info from id table.
++ */
++static bool spi_nand_detect_onfi(struct spi_nand_chip *chip)
++{
++	struct spi_nand_onfi_params *p;
++	u8 *buffer;
++	int read_cache_op;
++	bool ret = true;
++	int i;
++
++	buffer = malloc(256 * 3);
++	spi_nand_change_mode(chip, OTP_MODE);
++	spi_nand_read_page_to_cache(chip, 0x01);
++	spi_nand_wait(chip, NULL);
++	/*
++	* read parameter page can only ues 1-1-1 mode
++	*/
++	read_cache_op = chip->read_cache_op;
++	chip->read_cache_op = SPINAND_CMD_READ_FROM_CACHE;
++	spi_nand_read_from_cache(chip, 0x01, 0, 256 * 3, buffer);
++	chip->read_cache_op = read_cache_op;
++	spi_nand_change_mode(chip, NORMAL_MODE);
++
++	p = (struct spi_nand_onfi_params *)buffer;
++	for (i = 0; i < 3; i++, p++) {
++		if (p->sig[0] != 'O' || p->sig[1] != 'N' ||
++				p->sig[2] != 'F' || p->sig[3] != 'I')
++			continue;
++		if (onfi_crc16(ONFI_CRC_BASE, (uint8_t *)p, 254) ==
++				le16_to_cpu(p->crc))
++			break;
++	}
++	if (i == 3) {
++		spi_nand_error("Could not find valid ONFI parameter page; aborting\n");
++		ret = false;
++		goto out;
++	}
++
++	memcpy(&chip->onfi_params, p, sizeof(*p));
++
++	p = &chip->onfi_params;
++
++	sanitize_string(p->manufacturer, sizeof(p->manufacturer));
++	sanitize_string(p->model, sizeof(p->model));
++
++	chip->name = p->model;
++	chip->size = le32_to_cpu(p->byte_per_page) *
++			le32_to_cpu(p->pages_per_block) *
++			le32_to_cpu(p->blocks_per_lun) * p->lun_count;
++	chip->block_size = le32_to_cpu(p->byte_per_page) *
++			le32_to_cpu(p->pages_per_block);
++	chip->page_size = le32_to_cpu(p->byte_per_page);
++	chip->oob_size = le16_to_cpu(p->spare_bytes_per_page);
++	chip->lun_shift = ilog2(chip->block_size * le32_to_cpu(p->blocks_per_lun));
++	if (p->vendor.micron_sepcific.two_plane_page_read)
++		chip->options |= SPINAND_NEED_PLANE_SELECT;
++	if (p->vendor.micron_sepcific.die_selection)
++		chip->options |= SPINAND_NEED_DIE_SELECT;
++	chip->ecc_strength = p->vendor.micron_sepcific.ecc_ability;
++
++out:
++	free(buffer);
++	return ret;
++}
++
++/**
++ * spi_nand_set_rd_wr_op - Chose the best read write command
++ * @chip: SPI-NAND device structure
++ * Description:
++ *   Chose the fastest r/w command according to spi controller's ability.
++ * Note:
++ *   If 03h/0Bh follows SPI NAND protocol, there is no difference,
++ *   while if follows SPI NOR protocol, 03h command is working under
++ *   <=20Mhz@3.3V,<=5MHz@1.8V; 0Bh command is working under
++ *   133Mhz@3.3v, 83Mhz@1.8V.
++ */
++static void spi_nand_set_rd_wr_op(struct spi_nand_chip *chip)
++{
++	struct spi_slave *spi = chip->spi;
++
++	if (spi->op_mode_rx & SPI_OPM_RX_QOF)
++		chip->read_cache_op = SPINAND_CMD_READ_FROM_CACHE_QUAD_IO;
++	else if (spi->op_mode_rx & SPI_OPM_RX_DOUT)
++		chip->read_cache_op = SPINAND_CMD_READ_FROM_CACHE_DUAL_IO;
++	else
++		chip->read_cache_op = SPINAND_CMD_READ_FROM_CACHE_FAST;
++
++	if (spi->op_mode_tx & SPI_OPM_TX_QPP) {
++		chip->write_cache_op = SPINAND_CMD_PROG_LOAD_X4;
++		chip->write_cache_rdm_op = SPINAND_CMD_PROG_LOAD_RDM_DATA_X4;
++	} else {
++		chip->write_cache_op = SPINAND_CMD_PROG_LOAD;
++		chip->write_cache_rdm_op = SPINAND_CMD_PROG_LOAD_RDM_DATA;
++	}
++}
++
++/**
++ * spi_nand_init - [Interface] Init SPI-NAND device driver
++ * @spi: spi device structure
++ * @chip_ptr: pointer point to spi nand device structure pointer
++ */
++static int spi_nand_init(struct spi_slave *spi, struct spi_nand_chip **chip_ptr)
++{
++	u8 id[SPINAND_MAX_ID_LEN] = {0};
++	struct spi_nand_chip *chip = NULL;
++
++	chip = malloc(sizeof(struct spi_nand_chip));
++	if (!chip)
++		return -ENOMEM;
++
++	memset(chip, 0, sizeof(struct spi_nand_chip));
++	chip->spi = spi;
++
++	spi_nand_set_rd_wr_op(chip);
++	spi_nand_reset(chip);
++	spi_nand_read_id(chip, id);
++
++	if (spi_nand_scan_id_table(chip, id))
++		goto ident_done;
++	spi_nand_info("SPI-NAND type mfr_id: %x, dev_id: %x is not in id table.\n",
++				id[0], id[1]);
++
++	if (spi_nand_detect_onfi(chip))
++		goto ident_done;
++
++	return -ENODEV;
++
++ident_done:
++	spi_nand_info("SPI-NAND: %s is found.\n", chip->name);
++
++	chip->mfr_id = id[0];
++	chip->dev_id = id[1];
++	chip->block_shift = ilog2(chip->block_size);
++	chip->page_shift = ilog2(chip->page_size);
++	chip->page_mask = chip->page_size - 1;
++	chip->lun = 0;
++
++	chip->oobbuf = malloc(chip->oob_size);
++	if (!chip->oobbuf)
++		return -ENOMEM;
++
++	if (chip->oob_size == 64)
++		chip->ecclayout = &micron_ecc_layout_64;
++	else if (chip->oob_size == 128)
++		chip->ecclayout = &micron_ecc_layout_128;
++
++	chip->refresh_threshold = (chip->ecc_strength * 3 + 3) / 4;
++
++	spi_nand_lock_block(chip, BL_ALL_UNLOCKED);
++	spi_nand_enable_ecc(chip);
++	*chip_ptr = chip;
++
++	return 0;
++}
++
++int spi_nand_cmd_write_ops(struct spi_nand_chip *chip, u32 offset,
++		size_t len, const void *buf)
++{
++	size_t retlen;
++	size_t leftlen = len;
++	size_t writelen;
++	size_t block_len, block_off;
++	loff_t block_start;
++	u32 writeoffset;
++	int ret = 0;
++	bool end;
++
++	while (leftlen > 0) {
++		if (offset >= chip->size)
++			return -1;
++
++		writeoffset = offset;
++		writelen = 0;
++		end = false;
++		while ((writelen < leftlen) && !end) {
++			block_start = offset & ~(loff_t)(chip->block_size - 1);
++			block_off = offset & (chip->block_size - 1);
++			block_len = chip->block_size - block_off;
++
++			if (!spi_nand_block_isbad(chip, block_start))
++				writelen += block_len;
++			else
++				end = true;
++			offset += block_len;
++		}
++		if (writelen) {
++			writelen = min(writelen, leftlen);
++			ret = spi_nand_write(chip, writeoffset, writelen, &retlen, buf + (len - leftlen));
++			if (ret || writelen != retlen)
++				return -1;
++			leftlen -= writelen;
++		}
++	}
++
++	return ret;
++}
++
++int spi_nand_cmd_erase_ops(struct spi_nand_chip *chip, u32 offset, size_t len, bool spread)
++{
++	size_t leftlen = len;
++	size_t eraselen;
++	u32 eraseoffset;
++	u64 endaddr = offset + len;
++	int ret = 0;
++	bool end;
++
++	if (offset & (chip->block_size - 1)) {
++		spi_nand_error("%s: Unaligned address\n", __func__);
++		return -EINVAL;
++	}
++
++	if (len & (chip->block_size - 1)) {
++		spi_nand_error("%s: Length not block aligned\n", __func__);
++		return -EINVAL;
++	}
++
++	if (endaddr > chip->size) {
++		spi_nand_error("%s: Erase past end of device\n", __func__);
++		return -EINVAL;
++	}
++
++	while (leftlen > 0) {
++		if (offset >= chip->size)
++			return -1;
++
++		eraseoffset = offset;
++		eraselen = 0;
++		end = false;
++		while ((eraselen < leftlen) && !end) {
++			if (!spi_nand_block_isbad(chip, offset))
++				eraselen += chip->block_size;
++			else
++				end = true;
++			offset += chip->block_size;
++		}
++		if (eraselen) {
++			ret = spi_nand_erase(chip, eraseoffset, eraselen);
++			if (ret)
++				return -1;
++		}
++		if (spread)
++			leftlen -= eraselen;
++		else
++			leftlen = endaddr - offset;
++	}
++
++	return ret;
++}
++
++int spi_nand_cmd_read_ops(struct spi_nand_chip *chip, u32 offset,
++		size_t len, void *data)
++{
++	size_t retlen;
++	size_t leftlen = len;
++	size_t readlen;
++	size_t block_len, block_off;
++	loff_t block_start;
++	u32 readoffset;
++	int ret = 0;
++	bool end;
++
++	while (leftlen > 0) {
++		if (offset >= chip->size)
++			return -1;
++
++		readoffset = offset;
++		readlen = 0;
++		end = false;
++		while ((readlen < leftlen) && !end) {
++			block_start = offset & ~(loff_t)(chip->block_size - 1);
++			block_off = offset & (chip->block_size - 1);
++			block_len = chip->block_size - block_off;
++
++			if (!spi_nand_block_isbad(chip, block_start))
++				readlen += block_len;
++			else
++				end = true;
++			offset += block_len;
++		}
++		if (readlen) {
++			readlen = min(readlen, leftlen);
++			ret = spi_nand_read(chip, readoffset, readlen, &retlen, data + (len - leftlen));
++			if (ret || readlen != retlen)
++				return -1;
++			leftlen -= readlen;
++		}
++	}
++
++	return ret;
++}
++
++int spi_nand_probe_slave(struct spi_slave *spi, struct spi_nand_chip **chip)
++{
++	int ret;
++
++	/* Setup spi_slave */
++	if (!spi) {
++		printf("SPI-NAND: Failed to set up slave\n");
++		return -ENODEV;
++	}
++
++	/* Claim spi bus */
++	ret = spi_claim_bus(spi);
++	if (ret) {
++		debug("SPI-NAND: Failed to claim SPI bus: %d\n", ret);
++		return ret;
++	}
++
++	ret = spi_nand_init(spi, chip);
++	if (ret) {
++		printf("SPI NAND init failed\n");
++		return ret;
++	}
++
++	/* Release spi bus */
++	spi_release_bus(spi);
++
++	return 0;
++}
++
++/**
++ * spi_nand_release - [Interface] Release function
++ * @chip: spi nand device structure
++ */
++void spi_nand_release(struct spi_nand_chip *chip)
++{
++	free(chip->oobbuf);
++	free(chip);
++
++	return;
++}
+diff --git a/drivers/mtd/spi-nand/spi-nand-cmd.c b/drivers/mtd/spi-nand/spi-nand-cmd.c
+new file mode 100644
+index 0000000..9840a46
+--- /dev/null
++++ b/drivers/mtd/spi-nand/spi-nand-cmd.c
+@@ -0,0 +1,131 @@
++/**
++* spi-nand-cmd.c
++*
++* Copyright (c) 2009-2015 Micron Technology, Inc.
++*
++* This program is free software; you can redistribute it and/or
++* modify it under the terms of the GNU General Public License
++* as published by the Free Software Foundation; either version 2
++* of the License, or (at your option) any later version.
++*
++* This program is distributed in the hope that it will be useful,
++* but WITHOUT ANY WARRANTY; without even the implied warranty of
++* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++* GNU General Public License for more details.
++*/
++#include <common.h>
++#include <spi-nand.h>
++#include <asm-generic/errno.h>
++#include <spi.h>
++
++struct spi_nand_cmd_cfg {
++	u8		opcode;
++	u8		addr_bytes;
++	u8		addr_bits;
++	u8		dummy_bytes;
++	u8		data_bits;
++};
++
++
++static struct spi_nand_cmd_cfg micron_cmd_cfg_table[] = {
++/*opcode	addr_bytes	addr_bits	dummy_bytes	data_nbits*/
++	{SPINAND_CMD_GET_FEATURE,		1,	1,	0,	1},
++	{SPINAND_CMD_SET_FEATURE,		1,	1,	0,	1},
++	{SPINAND_CMD_PAGE_READ,			3,	1,	0,	0},
++	{SPINAND_CMD_READ_PAGE_CACHE_RDM,	3,	1,	0,	0},
++	{SPINAND_CMD_READ_PAGE_CACHE_LAST,	0,	0,	0,	0},
++#ifdef CONFIG_SPI_NAND_USE_SPI_NOR_RD_PROT
++	{SPINAND_CMD_READ_FROM_CACHE,		3,	1,	0,	1},
++	{SPINAND_CMD_READ_FROM_CACHE_FAST,	3,	1,	1,	1},
++#else
++	{SPINAND_CMD_READ_FROM_CACHE,		2,	1,	1,	1},
++	{SPINAND_CMD_READ_FROM_CACHE_FAST,	2,	1,	1,	1},
++#endif
++	{SPINAND_CMD_READ_FROM_CACHE_X2,	2,	1,	1,	2},
++	{SPINAND_CMD_READ_FROM_CACHE_DUAL_IO,	2,	2,	1,	2},
++	{SPINAND_CMD_READ_FROM_CACHE_X4,	2,	1,	1,	4},
++	{SPINAND_CMD_READ_FROM_CACHE_QUAD_IO,	2,	4,	2,	4},
++	{SPINAND_CMD_BLK_ERASE,			3,	1,	0,	0},
++	{SPINAND_CMD_PROG_EXC,			3,	1,	0,	0},
++	{SPINAND_CMD_PROG_LOAD,			2,	1,	0,	1},
++	{SPINAND_CMD_PROG_LOAD_RDM_DATA,	2,	1,	0,	1},
++	{SPINAND_CMD_PROG_LOAD_X4,		2,	1,	0,	4},
++	{SPINAND_CMD_PROG_LOAD_RDM_DATA_X4,	2,	1,	0,	4},
++	{SPINAND_CMD_WR_ENABLE,			0,	0,	0,	0},
++	{SPINAND_CMD_WR_DISABLE,		0,	0,	0,	0},
++	{SPINAND_CMD_READ_ID,			0,	0,	1,	1},
++	{SPINAND_CMD_RESET,			0,	0,	0,	0},
++	{SPINAND_CMD_END},
++};
++
++static struct spi_nand_cmd_cfg *spi_nand_lookup_cmd_cfg_table(u8 opcode,
++				struct spi_nand_cmd_cfg *table)
++{
++	struct spi_nand_cmd_cfg *index = table;
++
++	for (; index->opcode != SPINAND_CMD_END; index++) {
++		if (index->opcode == opcode)
++			return index;
++	}
++
++	spi_nand_error("Invalid spi nand opcode %x\n", opcode);
++	BUG();
++}
++
++
++static int spi_nand_xfer(struct spi_slave *slave, unsigned int bitlen, u8 bits,
++			const void *dout, void *din, unsigned long flags)
++{
++	if (bits == 4)
++		flags |= SPI_XFER_QUAD;
++	else if (bits == 2)
++		flags |= SPI_XFER_DUAL;
++
++	return spi_xfer(slave, bitlen, dout, din, flags);
++}
++
++/*
++ * spi_nand_issue_cmd - to process a command to send to the SPI-NAND
++ * @spi: spi device structure
++ * @cmd: command structure
++ *
++ *    Set up the command buffer to send to the SPI controller.
++ *    The command buffer has to initialized to 0.
++ */
++int spi_nand_issue_cmd(struct spi_nand_chip *chip, struct spi_nand_cmd *cmd)
++{
++	struct spi_nand_cmd_cfg *cmd_cfg = NULL;
++	struct spi_slave *spi = chip->spi;
++	int flags = SPI_XFER_BEGIN;
++	u8 buf[SPINAND_MAX_ADDR_LEN];
++
++	cmd_cfg = spi_nand_lookup_cmd_cfg_table(cmd->cmd, micron_cmd_cfg_table);
++
++	if (!cmd_cfg)
++		return -EINVAL;
++
++	if (cmd->n_tx == 0 && cmd->n_rx == 0 && cmd_cfg->addr_bytes == 0 && cmd_cfg->dummy_bytes == 0)
++		flags |= SPI_XFER_END;
++
++	spi_nand_xfer(spi, 8, 1, &cmd->cmd, NULL, flags);
++	if (cmd_cfg->addr_bytes || cmd_cfg->dummy_bytes) {
++		flags = 0;
++		if (cmd->n_tx == 0 && cmd->n_rx == 0)
++			flags |= SPI_XFER_END;
++		if (cmd_cfg->addr_bytes > cmd->n_addr) {
++			memcpy(buf, cmd->addr, cmd->n_addr);
++			memset(cmd->addr, 0, cmd->n_addr);
++			memcpy(cmd->addr + cmd_cfg->addr_bytes - cmd->n_addr, buf, cmd->n_addr);
++		}
++		spi_nand_xfer(spi, (cmd_cfg->addr_bytes + cmd_cfg->dummy_bytes) * 8, cmd_cfg->addr_bits,
++				cmd->addr, NULL, flags);
++	}
++
++	if (cmd->n_tx) {
++		spi_nand_xfer(spi, cmd->n_tx * 8, cmd_cfg->data_bits, cmd->tx_buf, NULL, SPI_XFER_END);
++	} else if (cmd->n_rx) {
++		spi_nand_xfer(spi, cmd->n_rx * 8, cmd_cfg->data_bits, NULL, cmd->rx_buf, SPI_XFER_END);
++	}
++
++	return 0;
++}
+diff --git a/drivers/mtd/spi/cortina_serial_nand.c b/drivers/mtd/spi/cortina_serial_nand.c
+old mode 100755
+new mode 100644
+diff --git a/include/spi-nand.h b/include/spi-nand.h
+new file mode 100644
+index 0000000..c525e6f
+--- /dev/null
++++ b/include/spi-nand.h
+@@ -0,0 +1,308 @@
++/**
++* spi-nand.h
++*
++* Copyright (c) 2009-2015 Micron Technology, Inc.
++*
++* This program is free software; you can redistribute it and/or
++* modify it under the terms of the GNU General Public License
++* as published by the Free Software Foundation; either version 2
++* of the License, or (at your option) any later version.
++*
++* This program is distributed in the hope that it will be useful,
++* but WITHOUT ANY WARRANTY; without even the implied warranty of
++* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++* GNU General Public License for more details.
++*/
++#ifndef _SPI_NAND_H
++#define _SPI_NAND_H
++
++#include <linux/types.h>
++#include <linux/mtd/mtd.h>
++
++/*
++ * Standard SPI-NAND flash commands
++ */
++#define SPINAND_CMD_RESET			0xff
++#define SPINAND_CMD_GET_FEATURE			0x0f
++#define SPINAND_CMD_SET_FEATURE			0x1f
++#define SPINAND_CMD_PAGE_READ			0x13
++#define SPINAND_CMD_READ_PAGE_CACHE_RDM		0x30
++#define SPINAND_CMD_READ_PAGE_CACHE_LAST	0x3f
++#define SPINAND_CMD_READ_FROM_CACHE		0x03
++#define SPINAND_CMD_READ_FROM_CACHE_FAST	0x0b
++#define SPINAND_CMD_READ_FROM_CACHE_X2		0x3b
++#define SPINAND_CMD_READ_FROM_CACHE_DUAL_IO	0xbb
++#define SPINAND_CMD_READ_FROM_CACHE_X4		0x6b
++#define SPINAND_CMD_READ_FROM_CACHE_QUAD_IO	0xeb
++#define SPINAND_CMD_BLK_ERASE			0xd8
++#define SPINAND_CMD_PROG_EXC			0x10
++#define SPINAND_CMD_PROG_LOAD			0x02
++#define SPINAND_CMD_PROG_LOAD_RDM_DATA		0x84
++#define SPINAND_CMD_PROG_LOAD_X4		0x32
++#define SPINAND_CMD_PROG_LOAD_RDM_DATA_X4	0x34
++#define SPINAND_CMD_READ_ID			0x9f
++#define SPINAND_CMD_WR_DISABLE			0x04
++#define SPINAND_CMD_WR_ENABLE			0x06
++#define SPINAND_CMD_END				0x0
++
++
++/* feature registers */
++#define REG_BLOCK_LOCK		0xa0
++#define REG_CFG			0xb0
++#define REG_STATUS		0xc0
++#define REG_DIE_SELECT		0xd0
++
++/* status */
++#define STATUS_OIP_MASK		0x01
++#define STATUS_CRBSY_MASK		0x80
++#define STATUS_READY		(0 << 0)
++#define STATUS_BUSY		(1 << 0)
++
++#define STATUS_E_FAIL_MASK	0x04
++#define STATUS_E_FAIL		(1 << 2)
++
++#define STATUS_P_FAIL_MASK	0x08
++#define STATUS_P_FAIL		(1 << 3)
++
++
++/*Configuration register defines*/
++#define CFG_ECC_MASK		0X10
++#define CFG_ECC_ENABLE		0x10
++#define CFG_LOT_MASK		0x20
++#define CFG_LOT_ENABLE		0x20
++#define CFG_OTP_MASK		0xc2
++#define CFG_OTP_ENTER		0x40
++#define CFG_OTP_EXIT		0x00
++
++/* block lock */
++#define BL_ALL_LOCKED		0x7c
++#define BL_U_1_1024_LOCKED		0x08
++#define BL_U_1_512_LOCKED		0x10
++#define BL_U_1_256_LOCKED		0x18
++#define BL_U_1_128_LOCKED		0x20
++#define BL_U_1_64_LOCKED		0x28
++#define BL_U_1_32_LOCKED		0x30
++#define BL_U_1_16_LOCKED		0x38
++#define BL_U_1_8_LOCKED		0x40
++#define BL_U_1_4_LOCKED		0x48
++#define BL_U_1_2_LOCKED		0x50
++#define BL_L_1_1024_LOCKED		0x0c
++#define BL_L_1_512_LOCKED		0x14
++#define BL_L_1_256_LOCKED		0x1c
++#define BL_L_1_128_LOCKED		0x24
++#define BL_L_1_64_LOCKED		0x2c
++#define BL_L_1_32_LOCKED		0x34
++#define BL_L_1_16_LOCKED		0x3c
++#define BL_L_1_8_LOCKED		0x44
++#define BL_L_1_4_LOCKED		0x4c
++#define BL_L_1_2_LOCKED		0x54
++#define BL_ALL_UNLOCKED		0X00
++
++/* die select */
++#define DIE_SELECT_MASK		0x40
++#define DIE_SELECT_DS0		0x00
++#define DIE_SELECT_DS1		0x40
++
++#define SPI_NAND_MT29F_ECC_MASK		0x70
++#define SPI_NAND_MT29F_ECC_0_BIT		0x00
++#define SPI_NAND_MT29F_ECC_1_3_BIT	0x10
++#define SPI_NAND_MT29F_ECC_4_6_BIT	0x30
++#define SPI_NAND_MT29F_ECC_7_8_BIT	0x50
++#define SPI_NAND_MT29F_ECC_UNCORR	0x20
++
++struct micron_onfi_specific {
++	u8		two_plane_page_read;		/*166*/
++	u8		reserved0[8];			/*167-174*/
++	u8		otp_mode;				/*175*/
++	u8		otp_page_start;		/*176*/
++	u8		otp_data_protect_addr;	/*177*/
++	u8		otp_page_number;			/*178*/
++	u8		otp_feature_addr;			/*179*/
++	u8		reserved1[68];			/*180-247*/
++	u8		ecc_ability;			/*248*/
++	u8		die_selection;			/*249*/
++	u8		reserved2[3];			/*250-252*/
++	u8		parameter_page_version;	/*253*/
++}__attribute__((packed));
++
++union spi_nand_vendor_specific {
++	u8		vendor_specific[88];
++	struct micron_onfi_specific micron_sepcific;
++};
++
++struct spi_nand_onfi_params {
++	/* rev info and features block */
++	/* 'O' 'N' 'F' 'I'  */
++	u8		sig[4];				/*0-3*/
++	__le16		revision;			/*4-5*/
++	__le16		features;			/*6-7*/
++	__le16		opt_cmd;			/*8-9*/
++	u8		reserved0[22];			/*10-31*/
++
++	/* manufacturer information block */
++	char		manufacturer[12];		/*32-43*/
++	char		model[20];			/*44-63*/
++	u8		mfr_id;				/*64*/
++	__le16		date_code;			/*65-66*/
++	u8		reserved1[13];			/*67-79*/
++
++	/* memory organization block */
++	__le32		byte_per_page;			/*80-83*/
++	__le16		spare_bytes_per_page;		/*84*85*/
++	__le32		data_bytes_per_ppage;		/*86-89*/
++	__le16		spare_bytes_per_ppage;		/*90-91*/
++	__le32		pages_per_block;		/*92-95*/
++	__le32		blocks_per_lun;			/*96-99*/
++	u8		lun_count;			/*100*/
++	u8		addr_cycles;			/*101*/
++	u8		bits_per_cell;			/*102*/
++	__le16		bb_per_lun;			/*103-104*/
++	__le16		block_endurance;		/*105-106*/
++	u8		guaranteed_good_blocks;		/*107*/
++	__le16		guaranteed_block_endurance;	/*108-109*/
++	u8		programs_per_page;		/*110*/
++	u8		ppage_attr;			/*111*/
++	u8		ecc_bits;			/*112*/
++	u8		interleaved_bits;		/*113*/
++	u8		interleaved_ops;		/*114*/
++	u8		reserved2[13];			/*115-127*/
++
++	/* electrical parameter block */
++	u8		io_pin_capacitance_max;		/*128*/
++	__le16		timing_mode;			/*129-130*/
++	__le16		program_cache_timing_mode;	/*131-132*/
++	__le16		t_prog;				/*133-134*/
++	__le16		t_bers;				/*135-136*/
++	__le16		t_r;				/*137-138*/
++	__le16		t_ccs;				/*139-140*/
++	u8		reserved3[23];			/*141-163*/
++
++	/* vendor */
++	__le16		vendor_specific_revision;	/*164-165*/
++	union spi_nand_vendor_specific vendor;		/*166-253*/
++
++	__le16		crc;				/*254-255*/
++} __attribute__((packed));
++
++#define ONFI_CRC_BASE	0x4F4E
++
++/**
++ * struct spi_nand_chip - SPI-NAND Private Flash Chip Data
++ * @name:		name of the chip
++ * @spi:		[INTERN] point to spi device structure
++ * @mfr_id:		[BOARDSPECIFIC] manufacture id
++ * @dev_id:		[BOARDSPECIFIC] device id
++ * @read_cache_op:	[REPLACEABLE] Opcode of read from cache
++ * @write_cache_op:	[REPLACEABLE] Opcode of program load
++ * @write_cache_rdm_op:	[REPLACEABLE] Opcode of program load random
++ * @oobbuf:		[INTERN] buffer for read/write oob
++ * @size:		[INTERN] the size of chip
++ * @block_size:		[INTERN] the size of eraseblock
++ * @page_size:		[INTERN] the size of page
++ * @oob_size:	[INTERN] the size of page oob size
++ * @block_shift:	[INTERN] number of address bits in a eraseblock
++ * @page_shift:		[INTERN] number of address bits in a page (column
++ *			address bits).
++ * @pagemask:		[INTERN] page number mask = number of (pages / chip) - 1
++ * @options:		[BOARDSPECIFIC] various chip options. They can partly
++ *			be set to inform nand_scan about special functionality.
++ * @ecc_strength:	[INTERN] ECC correctability
++ * @refresh_threshold:	[INTERN] Bitflip threshold to return -EUCLEAN
++ * @ecclayout:		[BOARDSPECIFIC] ECC layout control structure
++ *			See the defines for further explanation.
++ * @onfi_params:	[INTERN] holds the ONFI page parameter
++ */
++struct spi_nand_chip {
++	char		*name;
++	struct spi_slave	*spi;
++
++	u8		mfr_id;
++	u8		dev_id;
++	u8		read_cache_op;
++	u8		write_cache_op;
++	u8		write_cache_rdm_op;
++
++	u8		*oobbuf;
++	u64		size;
++	u32		block_size;
++	u16		page_size;
++	u16		oob_size;
++	u8		lun_shift;
++	u8		block_shift;
++	u8		page_shift;
++	u16		page_mask;
++	u32		options;
++	u32		ecc_strength;
++	u8		refresh_threshold;
++	u8		lun;
++	struct nand_ecclayout *ecclayout;
++	struct spi_nand_onfi_params	 onfi_params;
++};
++
++struct spi_nand_flash {
++	char		*name;
++	u8		mfr_id;
++	u8		dev_id;
++	u32		page_size;
++	u32		oob_size;
++	u32		pages_per_blk;
++	u32		blks_per_lun;
++	u32		luns_per_chip;
++	u32		ecc_strength;
++	u32		options;
++};
++
++#define SPINAND_MAX_ADDR_LEN		4
++#define MIN_TRY_COUNT		3
++
++struct spi_nand_cmd {
++	u8		cmd;
++	u8		n_addr;		/* Number of address */
++	u8		addr[SPINAND_MAX_ADDR_LEN];	/* Reg Offset */
++	u32		n_tx;		/* Number of tx bytes */
++	const u8	*tx_buf;	/* Tx buf */
++	u32		n_rx;		/* Number of rx bytes */
++	u8		*rx_buf;	/* Rx buf */
++};
++
++enum {
++	NORMAL_MODE,
++	OTP_MODE,
++};
++
++#define SPI_NAND_INFO(nm, mid, did, pagesz, oobsz, pg_per_blk,\
++	blk_per_lun, lun_per_chip, ecc_stren, opts)		\
++	{ .name = (nm), .mfr_id = (mid), .dev_id = (did),\
++	.page_size = (pagesz), .oob_size = (oobsz),\
++	.pages_per_blk = (pg_per_blk), .blks_per_lun = (blk_per_lun),\
++	.luns_per_chip = (lun_per_chip),			\
++	.ecc_strength = (ecc_stren), .options = (opts) }
++
++/*SPI NAND chip options*/
++#define SPINAND_NEED_PLANE_SELECT	(1 << 0)
++#define SPINAND_NEED_DIE_SELECT	(1 << 1)
++
++#define SPINAND_MFR_MICRON		0x2C
++#define SPINAND_MAX_ID_LEN		2
++
++#ifdef DEBUG
++#define spi_nand_debug(fmt,args...)	printf(fmt ,##args)
++#else
++#define spi_nand_debug(fmt,args...)
++#endif
++#define spi_nand_error(fmt,args...)	printf(fmt ,##args)
++#define spi_nand_info(fmt,args...)	printf(fmt ,##args)
++
++int spi_nand_block_markbad(struct spi_nand_chip *chip, loff_t offs);
++int spi_nand_block_isbad(struct spi_nand_chip *chip, loff_t offs);
++int spi_nand_probe_slave(struct spi_slave *spi, struct spi_nand_chip **chip);
++int spi_nand_cmd_read_ops(struct spi_nand_chip *chip, u32 offset,
++		size_t len, void *data);
++int spi_nand_cmd_write_ops(struct spi_nand_chip *chip, u32 offset,
++		size_t len, const void *buf);
++int spi_nand_cmd_erase_ops(struct spi_nand_chip *chip, u32 offset, size_t len, bool spread);
++struct spi_nand_chip *spi_nand_flash_probe(unsigned int busnum, unsigned int cs,
++		unsigned int max_hz, unsigned int spi_mode);
++void spi_nand_flash_free(struct spi_nand_chip *chip);
++void spi_nand_release(struct spi_nand_chip *chip);
++#endif
+diff --git a/include/spi.h b/include/spi.h
+index c58e453..006037a 100644
+--- a/include/spi.h
++++ b/include/spi.h
+@@ -31,6 +31,8 @@
+ #define SPI_XFER_MMAP_END	0x10	/* Memory Mapped End */
+ #define SPI_XFER_ONCE		(SPI_XFER_BEGIN | SPI_XFER_END)
+ #define SPI_XFER_U_PAGE	(1 << 5)
++#define SPI_XFER_DUAL	(1 << 30)
++#define SPI_XFER_QUAD	(1 << 31)
+ 
+ /* SPI TX operation modes */
+ #define SPI_OPM_TX_QPP		(1 << 0)
+-- 
+1.8.3.1
+

@@ -1,0 +1,1783 @@
+From 52b2fe4d57e6d0259f484b4d885f46b615a7d330 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+Date: Wed, 6 Sep 2017 15:30:16 +0800
+Subject: [PATCH 5/5] Saturn_SFU: Add Cortina SPI-NAND Flash Controller Driver
+ (Mostly functions porting from uboot).
+
+Signed-off-by: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+---
+ arch/mips/boot/dts/cortina/saturn_sfu.dts      |    2 +-
+ arch/mips/boot/dts/cortina/saturn_spinand.dtsi |   61 +
+ drivers/mtd/spi-nand/chips/Kconfig             |    5 +
+ drivers/mtd/spi-nand/chips/Makefile            |    1 +
+ drivers/mtd/spi-nand/chips/cortina_spi_nand.c  | 1543 ++++++++++++++++++++++++
+ drivers/mtd/spi-nand/spi-nand-base.c           |    2 +-
+ drivers/mtd/spi-nand/spi-nand-cmd.c            |    4 +-
+ include/linux/mtd/spi-nand.h                   |   41 +-
+ include/soc/cortina/ca_flash.h                 |    1 +
+ 9 files changed, 1638 insertions(+), 22 deletions(-)
+ create mode 100755 arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+ create mode 100755 drivers/mtd/spi-nand/chips/cortina_spi_nand.c
+
+diff --git a/arch/mips/boot/dts/cortina/saturn_sfu.dts b/arch/mips/boot/dts/cortina/saturn_sfu.dts
+index ab9cdea..96d08be 100755
+--- a/arch/mips/boot/dts/cortina/saturn_sfu.dts
++++ b/arch/mips/boot/dts/cortina/saturn_sfu.dts
+@@ -7,7 +7,7 @@
+ /dts-v1/;
+ #include <dt-bindings/gpio/gpio.h>
+ #include "saturn_soc.dtsi"
+-#include "saturn_sflash.dtsi"
++#include "saturn_spinand.dtsi"
+ 
+ /* BLOCK RESET */
+ #define NI_RESET                0
+diff --git a/arch/mips/boot/dts/cortina/saturn_spinand.dtsi b/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+new file mode 100755
+index 0000000..0feab5b
+--- /dev/null
++++ b/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+@@ -0,0 +1,61 @@
++/*
++ * Copyright (c) 2015-2017, Cortina Access. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * Redistributions of source code must retain the above copyright notice, this
++ * list of conditions and the following disclaimer.
++ *
++ * Redistributions in binary form must reproduce the above copyright notice,
++ * this list of conditions and the following disclaimer in the documentation
++ * and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++ * POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/ {
++	spi-nand@b2223000 {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		compatible = "cortina,spi-nand";
++		reg = <0xb2223000 0x40>;
++		spinand,mfr-name = "micron";
++		spinand,spi-mode = <0xA00>;
++
++		SSB@0 {
++			label = "bootloader";
++			reg = <0x0 0x300000>;
++		};
++
++		uboot-env@300000 {
++			label = "uboot-env";
++			reg = <0x300000 0x80000>;
++		};
++
++		dtb@380000 {
++			label = "device-tree";
++			reg = <0x380000 0x80000>;
++		};
++
++		kernel@400000 {
++			label = "kernel";
++			reg = <0x400000 0x600000>;
++		};
++
++		rootfs@A00000 {
++			label = "rootfs";
++			reg = <0xA00000 0x1600000>;
++		};
++	};
++};
+diff --git a/drivers/mtd/spi-nand/chips/Kconfig b/drivers/mtd/spi-nand/chips/Kconfig
+index 5779bbc..bb1ac5d 100755
+--- a/drivers/mtd/spi-nand/chips/Kconfig
++++ b/drivers/mtd/spi-nand/chips/Kconfig
+@@ -7,4 +7,9 @@ config GENERIC_SPI_NAND
+ 	help
+ 	  This is to support SPI NAND device with generic SPI bus.
+ 
++config CORTINA_SPI_NAND
++    tristate "SPI NAND with Cortina SPI-NAND Controller"
++    help
++      This is to support SPI NAND device with Cortina SPI-NAND Controller.
++
+ endmenu
+diff --git a/drivers/mtd/spi-nand/chips/Makefile b/drivers/mtd/spi-nand/chips/Makefile
+index e651943..dc0ed86 100755
+--- a/drivers/mtd/spi-nand/chips/Makefile
++++ b/drivers/mtd/spi-nand/chips/Makefile
+@@ -1 +1,2 @@
+ obj-$(CONFIG_GENERIC_SPI_NAND) += generic_spi_nand.o
++obj-$(CONFIG_CORTINA_SPI_NAND) += cortina_spi_nand.o
+diff --git a/drivers/mtd/spi-nand/chips/cortina_spi_nand.c b/drivers/mtd/spi-nand/chips/cortina_spi_nand.c
+new file mode 100755
+index 0000000..0bedecf
+--- /dev/null
++++ b/drivers/mtd/spi-nand/chips/cortina_spi_nand.c
+@@ -0,0 +1,1543 @@
++/*
++ * Copyright (c) 2017-2019 Cortina Access, Inc.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ */
++#include <linux/module.h>
++#include <linux/delay.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/sched.h>
++#include <linux/device.h>
++#include <linux/io.h>
++#include <linux/slab.h>
++#include <linux/errno.h>
++#include <linux/err.h>
++#include <linux/mm.h>
++#include <linux/mtd/mtd.h>
++#include <linux/mtd/partitions.h>
++#include <linux/of_address.h>
++#include <linux/of_device.h>
++#include <linux/of_platform.h>
++#include <linux/mtd/spi-nand.h>
++#include <soc/cortina/ca_flash.h>
++
++#define SPINAND_STATUS_WEL		0x02
++#define SPINAND_STATUS_WIP		0x01
++#define SPINAND_STATUS_BP		0x1C
++#define SPINAND_STATUS_SRWD		0x80
++
++#define SPINAND_WEL_TIMEOUT		8000
++#define SPINAND_PROGRAM_TIMEOUT	8000
++#define SPINAND_ERASE_TIMEOUT	400000
++#define SPINAND_CMD_TIMEOUT		40
++
++#define SF_ACCESS_MIO_SINGLE	0
++#define SF_ACCESS_MIO_DUAL		1
++#define SF_ACCESS_MIO_QUARD		2
++
++#define	SPI_TX_DUAL	0x100			/* transmit with 2 wires */
++#define	SPI_TX_QUAD	0x200			/* transmit with 4 wires */
++#define	SPI_RX_DUAL	0x400			/* receive with 2 wires */
++#define	SPI_RX_QUAD	0x800			/* receive with 4 wires */
++
++/**
++*  Default OOB area specification layout
++*/
++static struct nand_ecclayout micron_ecc_layout_64 = {
++	.eccbytes = 32,
++	.eccpos = {
++		   8, 9, 10, 11, 12, 13, 14, 15,
++		   24, 25, 26, 27, 28, 29, 30, 21,
++		   40, 41, 42, 43, 44, 45, 46, 47,
++		   56, 57, 58, 59, 60, 61, 62, 63},
++	.oobavail = 30,
++	.oobfree = {
++		{.offset = 2,
++		 .length = 6},
++		{.offset = 16,
++		 .length = 8},
++		{.offset = 32,
++		 .length = 8},
++		{.offset = 48,
++		 .length = 8}, }
++};
++
++static struct nand_ecclayout micron_ecc_layout_128 = {
++	.eccbytes = 64,
++	.eccpos = {
++		64, 65, 66, 67, 68, 69, 70, 71,
++		72, 73, 74, 75, 76, 77, 78, 79,
++		80, 81, 82, 83, 84, 85, 86, 87,
++		88, 89, 90, 91, 92, 93, 94, 95,
++		96, 97, 98, 99, 100, 101, 102, 103,
++		104, 105, 106, 107, 108, 109, 110, 111,
++		112, 113, 114, 115, 116, 117, 118, 119,
++		120, 121, 122, 123, 124, 125, 126, 127},
++	.oobavail = 62,
++	.oobfree = {
++		{.offset = 2,
++		 .length = 62}, }
++};
++
++static struct nand_ecclayout gd5f_ecc_layout_256 = {
++	.eccbytes = 128,
++	.eccpos = {
++		128, 129, 130, 131, 132, 133, 134, 135,
++		136, 137, 138, 139, 140, 141, 142, 143,
++		144, 145, 146, 147, 148, 149, 150, 151,
++		152, 153, 154, 155, 156, 157, 158, 159,
++		160, 161, 162, 163, 164, 165, 166, 167,
++		168, 169, 170, 171, 172, 173, 174, 175,
++		176, 177, 178, 179, 180, 181, 182, 183,
++		184, 185, 186, 187, 188, 189, 190, 191,
++		192, 193, 194, 195, 196, 197, 198, 199,
++		200, 201, 202, 203, 204, 205, 206, 207,
++		208, 209, 210, 211, 212, 213, 214, 215,
++		216, 217, 218, 219, 220, 221, 222, 223,
++		224, 225, 226, 227, 228, 229, 230, 231,
++		232, 233, 234, 235, 236, 237, 238, 239,
++		240, 241, 242, 243, 244, 245, 246, 247,
++		248, 249, 250, 251, 252, 253, 254, 255
++	},
++	.oobavail = 127,
++	.oobfree = { {1, 127} }
++};
++
++void static __iomem *flash_ctl_base;
++void static __iomem *flash_mem_base;
++
++#define GET_UP8BITS(x)	((x >> 8) & 0xff)
++
++static void spi_nand_mt29f_ecc_status(struct spi_nand_chip *chip,
++					unsigned int status,
++					unsigned int *corrected,
++					unsigned int *ecc_error)
++{
++	unsigned int ecc_status = status & SPI_NAND_MT29F_ECC_MASK;
++
++	*ecc_error = (ecc_status == SPI_NAND_MT29F_ECC_UNCORR);
++	switch (ecc_status) {
++	case SPI_NAND_MT29F_ECC_0_BIT:
++		*corrected = 0;
++		break;
++	case SPI_NAND_MT29F_ECC_1_3_BIT:
++		*corrected = 3;
++		break;
++	case SPI_NAND_MT29F_ECC_4_6_BIT:
++		*corrected = 6;
++		break;
++	case SPI_NAND_MT29F_ECC_7_8_BIT:
++		*corrected = 8;
++		break;
++	}
++}
++
++static void spi_nand_gd5f_ecc_status(struct spi_nand_chip *chip,
++					unsigned int status,
++					unsigned int *corrected,
++					unsigned int *ecc_error)
++{
++	unsigned int ecc_status = (status >> SPI_NAND_GD5F_ECC_SHIFT) &
++					     SPI_NAND_GD5F_ECC_MASK;
++
++	*ecc_error = (ecc_status == SPI_NAND_GD5F_ECC_UNCORR);
++	/*TODO fix corrected bits*/
++	if (*ecc_error == 0)
++		*corrected = ecc_status;
++}
++
++static int spi_nand_manufacture_init(struct spi_nand_chip *chip)
++{
++	switch (chip->mfr_id) {
++	case SPINAND_MFR_MICRON:
++		chip->get_ecc_status = spi_nand_mt29f_ecc_status;
++
++		if (chip->oob_size == 64)
++			chip->ecclayout = &micron_ecc_layout_64;
++		else if (chip->oob_size == 128)
++			chip->ecclayout = &micron_ecc_layout_128;
++
++		break;
++	case SPINAND_MFR_GIGADEVICE:
++		chip->get_ecc_status = spi_nand_gd5f_ecc_status;
++		chip->ecc_strength = 8;
++		if (chip->oob_size == 256)
++			chip->ecclayout = &gd5f_ecc_layout_256;
++
++		break;
++	default:
++		break;
++	}
++
++	return 0;
++}
++
++static int wait_flash_cmd_rdy(void)
++{
++	int tmp;
++	unsigned long timeout_jiffies;
++
++	timeout_jiffies = jiffies + msecs_to_jiffies(SPINAND_CMD_TIMEOUT);
++	for (;;) {
++		tmp = read_flash_ctrl_reg(FLASH_FLASH_ACCESS_START);
++		if ((tmp & SF_START_BIT_ENABLE) == 0) {
++			return 0;
++		}
++
++		if (time_after(jiffies, timeout_jiffies)) {
++			return -ETIME;
++		}
++
++		udelay(1);
++		schedule();
++	}
++}
++
++/*
++ * ca_spinand_get_feature_reg - send command 0xf with with address <addr> to get register value
++ * Description:
++ */
++static int ca_spinand_get_feature_reg(uint8_t addr, uint8_t *value)
++{
++
++	unsigned int reg_data;
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	sf_access.wrd = 0;
++	sf_ext_access.wrd = 0;
++
++	/* Get feature use 1 byte address as sub-command.
++	 * We must use extend access code to meet this protocol.
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_GET_FEATURE;
++	/* No dummy cnt */
++	sf_ext_access.bf.sflashDummyCount = -1;
++	/* 1 byte address */
++	sf_ext_access.bf.sflashAddrCount = 0;
++	/* 1 byte data */
++	sf_ext_access.bf.sflashDataCount = 0;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Command to get status */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, addr);
++
++	/* Issue command */
++	write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++	/* Wait command ready */
++	if (wait_flash_cmd_rdy() != 0)
++		return -1;
++
++	/* Read out status */
++	reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
++	*value = reg_data & 0xFF;
++
++	return 0;
++}
++
++/*
++ * ca_spinand_set_feature_reg - send command 0x1f with address <addr> to set register value
++ * Description:
++ */
++static int ca_spinand_set_feature_reg(uint8_t addr, const u8 *value)
++{
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	sf_access.wrd = 0;
++	sf_ext_access.wrd = 0;
++
++	/* Set feature use 1 byte address as sub-command.
++	 * We must use extend access code to meet this protocol.
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_SET_FEATURE;
++	/* No dummy cnt */
++	sf_ext_access.bf.sflashDummyCount = -1;
++	/* 1 byte address */
++	sf_ext_access.bf.sflashAddrCount = 0;
++	/* 1 byte data */
++	sf_ext_access.bf.sflashDataCount = 0;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Command to get status */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, addr);
++
++	/* Data register */
++	write_flash_ctrl_reg(FLASH_SF_DATA, *value);
++
++	/* Issue command */
++	write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++	/* Wait command ready */
++	if (wait_flash_cmd_rdy() != 0)
++		return -1;
++
++	return 0;
++}
++
++/* wait_till_ready - Check device status
++ * Description:
++ *    Read device status register until timeout or OIP cleared.
++ */
++#define MAX_WAIT_MS  (10)	/* erase might take 4ms */
++static int wait_till_ready(void)
++{
++	int retval;
++	u8 status = 0;
++	unsigned long timeout_jiffies;
++
++	timeout_jiffies = jiffies + msecs_to_jiffies(MAX_WAIT_MS);
++	for (;;) {
++		retval = ca_spinand_get_feature_reg(REG_STATUS, &status);
++		if (retval < 0)
++			return -1;
++		else if ((status & (STATUS_E_FAIL_MASK | STATUS_P_FAIL_MASK)))
++			break;
++		else if (!(status & STATUS_BUSY))
++			break;
++
++		if (time_after(jiffies, timeout_jiffies)) {
++			return -ETIME;
++		}
++
++		udelay(1);
++		schedule();
++	}
++
++	if (status & (STATUS_E_FAIL_MASK | STATUS_P_FAIL_MASK)) {
++		printk("Status[0x%x] error!\n", status);
++		return -1;
++	}
++
++	if ((status & STATUS_BUSY) == 0)
++		return 0;
++
++	return -1;
++}
++
++/*
++ * ca_spinand_write_enable- Enable write operation(erase,program)
++ * Description:
++ *    Enable write operation
++ */
++static int ca_spinand_write_enable(void)
++{
++	FLASH_SF_ACCESS_t sf_access;
++	sf_access.wrd = 0;
++
++	/* Write enable
++	 * Opcode only protocol
++	 */
++	sf_access.bf.sflashOpCode = SPINAND_CMD_WR_ENABLE;
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE);
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++	write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++	/* Wait command ready */
++	if (wait_flash_cmd_rdy() != 0)
++		printk("%s: command timeout!\n", __func__);
++
++	return 0;
++}
++
++/*
++ * ca_spi_nand_reset - Reset SPI Nand
++ * Description:
++ *     Reset: reset SPI Nand device
++ */
++static int ca_spinand_reset(void)
++{
++    FLASH_SF_ACCESS_t sf_access;
++    sf_access.wrd = 0;
++
++	/* Reset SPI-NAND
++	 * Opcode only protocol
++	 */
++	sf_access.bf.sflashOpCode = SPINAND_CMD_RESET;
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE);
++
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++	write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++    /* Wait command ready */
++    if (wait_flash_cmd_rdy() != 0) {
++        printk("%s fail!\n", __func__);
++        return -1;
++    }
++
++    /* elapse 1ms before issuing any other command */
++    udelay(1000);
++
++    if (wait_till_ready())
++        printk("%s wait timeout!\n", __func__);
++
++    return 0;
++}
++
++/*
++ * ca_spinand_read_id- Read SPI Nand ID
++ * Description:
++ *    Read ID: read two ID bytes from the SPI Nand device
++ */
++static int ca_spinand_read_id(u8 *id)
++{
++	int tmout = 0;
++	unsigned int reg_data;
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	sf_access.wrd = 0;
++
++	/* Read ID
++	 * Micron/Macronix:
++	 *  Opcode -> 8 dummy bits -> MAF_ID => DEV_ID
++	 * GigaDevice:
++	 *  Opcode -> MAF_ID => DEV_ID
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_READ_ID;
++	/* 0 dummy bits */
++	sf_ext_access.bf.sflashDummyCount = -1;
++	/* 0 address byte */
++	sf_ext_access.bf.sflashAddrCount = -1;
++	/* 3 data length */
++	sf_ext_access.bf.sflashDataCount = 2;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Start request */
++	write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++	if (wait_flash_cmd_rdy() != 0)
++		tmout = 1;
++
++	if (tmout) {
++		id[0] = id[1] = 0;
++		return -1;
++	}
++
++	reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
++	printk("SPI_NAND ID: 0x%x\n", reg_data);
++	id[0] = reg_data & 0x000000ff;
++	id[1] = (reg_data & 0x0000ff00) >> 8;
++	id[2] = (reg_data & 0x00ff0000) >> 16;
++
++	if (id[0] != SPINAND_MFR_GIGADEVICE) {
++		id[0] = id[1];
++		id[1] = id[2];
++		id[2] = 0x00;
++	}
++
++	return 0;
++}
++
++static int ca_spinand_read_page_to_cache(u32 page_id)
++{
++	/* volatile */ u8 status;
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	sf_access.wrd = 0;
++	sf_ext_access.wrd = 0;
++
++	/* Read to cache
++	 * Opcode -> 24bits offset addr => Get feature ....
++	 * 3 bytes address must rely on extend access mothod
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	sf_access.bf.sflashMIO = SF_ACCESS_MIO_SINGLE;
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_PAGE_READ;
++	/* 0 dummy bits */
++	sf_ext_access.bf.sflashDummyCount = -1;
++	/* 3 byte address */
++	sf_ext_access.bf.sflashAddrCount = 2;
++	/* ECC is handled by device, we just push data  */
++	sf_ext_access.bf.sflashDataCount = -1;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Fill address */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, page_id);
++
++	write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++	/* Wait command ready */
++	if (wait_flash_cmd_rdy() != 0) {
++		printk("%s fail!\n", __func__);
++		return -1;
++	}
++
++	/* 80uS with ECC enabled per Micron datasheet */
++	udelay(10);
++
++	if (wait_till_ready()) {
++		printk("%s wait timeout %d!\n", __func__, page_id);
++		return -1;
++	}
++
++	ca_spinand_get_feature_reg(REG_STATUS, &status);
++	if ((status & STATUS_OIP_MASK) == STATUS_READY) {
++		if ((status & STATUS_ECC_MASK) == STATUS_ECC_ERROR) {
++			printk("ECC error! page:%d\n", page_id);
++			return -1;
++		}
++		if ((status & STATUS_ECC_MASK) == STATUS_ECC_1BIT_CORRECTED)
++			printk("Bit corrected! page:%d\n", page_id);
++	}
++	return 0;
++}
++
++static int ca_spinand_read_cache_x1(u32 offset, int len, u8 *buf)
++{
++	unsigned int reg_data=0;
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	sf_access.wrd = 0;
++	sf_ext_access.wrd = 0;
++
++	/* Read from cache
++	 * Opcode -> 16bits offset addr -> data
++	 * 2 bytes address must use extend access mothod
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	sf_access.bf.sflashForceBurst = 1;
++
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_READ_FROM_CACHE_FAST;
++	/* 8 dummy bits */
++	sf_ext_access.bf.sflashDummyCount = 7;
++	/* 2 byte address */
++	sf_ext_access.bf.sflashAddrCount = 1;
++	/* 4 bytes in one command request */
++	sf_ext_access.bf.sflashDataCount = 3;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Fill address */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, offset);
++
++	/* Read out data */
++	while (len >= 4) {
++		/* Start access */
++		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++		/* Wait command ready */
++		if (wait_flash_cmd_rdy() != 0) {
++			printk("%s fail!\n", __func__);
++			return -1;
++		}
++
++		reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
++		*buf++ = reg_data & 0xFF;
++		*buf++ = (reg_data >> 8) & 0xFF;
++		*buf++ = (reg_data >> 16) & 0xFF;
++		*buf++ = (reg_data >> 24) & 0xFF;
++		len -= 4;
++	}
++
++	if (len > 0) {
++		/* Start access */
++		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++		/* Wait command ready */
++		if (wait_flash_cmd_rdy() != 0) {
++			printk("%s fail!\n", __func__);
++			return -1;
++		}
++
++		reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
++	}
++
++	switch (len) {
++		case 3:
++			*buf++ = reg_data & 0xFF;
++			*buf++ = (reg_data >> 8) & 0xFF;
++			*buf++ = (reg_data >> 16) & 0xFF;
++			break;
++		case 2:
++			*buf++ = reg_data & 0xFF;
++			*buf++ = (reg_data >> 8) & 0xFF;
++			break;
++		case 1:
++			*buf++ = reg_data & 0xFF;
++			break;
++		case 0:
++			break;
++		default:
++			printk("%s error length %d!\n", __func__, len);
++	}
++
++	/* Finish burst read  */
++	sf_access.bf.sflashForceBurst = 0;
++	sf_access.bf.sflashForceTerm = 1;
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	return 0;
++}
++
++int ca_spinand_read_cache_x2(u32 offset, int len, u8 *buf)
++{
++	unsigned int reg_data=0;
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	sf_access.wrd = 0;
++	sf_ext_access.wrd = 0;
++
++	/* Read from cache
++	 * Opcode -> 16bits offset addr -> data
++	 * 2 bytes address must rely on extend access mothod
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	sf_access.bf.sflashForceBurst = 1;
++	sf_access.bf.sflashMIO = SF_ACCESS_MIO_DUAL;
++	sf_access.bf.sflashMData = 1;
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_READ_FROM_CACHE_X2;
++	/* 8 dummy bits */
++	sf_ext_access.bf.sflashDummyCount = 7;
++	/* 2 byte address */
++	sf_ext_access.bf.sflashAddrCount = 1;
++	/* 4 bytes in one command request */
++	sf_ext_access.bf.sflashDataCount = 3;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Fill address */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, offset);
++
++	/* Read out data */
++	while (len >= 4) {
++		/* Start access */
++		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++		/* Wait command ready */
++		if (wait_flash_cmd_rdy() != 0) {
++			printk("%s fail!\n", __func__);
++			return -1;
++		}
++
++		reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
++		*buf++ = reg_data & 0xFF;
++		*buf++ = (reg_data >> 8) & 0xFF;
++		*buf++ = (reg_data >> 16) & 0xFF;
++		*buf++ = (reg_data >> 24) & 0xFF;
++		len -= 4;
++	}
++
++	if (len > 0) {
++		/* Start access */
++		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++		/* Wait command ready */
++		if (wait_flash_cmd_rdy() != 0) {
++			printk("%s fail!\n", __func__);
++			return -1;
++		}
++
++		reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
++	}
++
++	switch (len) {
++		case 3:
++			*buf++ = reg_data & 0xFF;
++			*buf++ = (reg_data >> 8) & 0xFF;
++			*buf++ = (reg_data >> 16) & 0xFF;
++			break;
++		case 2:
++			*buf++ = reg_data & 0xFF;
++			*buf++ = (reg_data >> 8) & 0xFF;
++			break;
++		case 1:
++			*buf++ = reg_data & 0xFF;
++			break;
++		case 0:
++			break;
++		default:
++			printk("%s error length!\n", __func__);
++	}
++
++	/* Finish burst read  */
++	sf_access.bf.sflashForceBurst = 0;
++	sf_access.bf.sflashForceTerm = 1;
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	return 0;
++}
++
++int ca_spinand_read_cache_x4(u32 offset, int len, u8 *buf)
++{
++	unsigned int reg_data=0;
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	sf_access.wrd = 0;
++	sf_ext_access.wrd = 0;
++
++	/* Read from cache
++	 * Opcode -> 16bits offset addr -> data
++	 * 2 bytes address must rely on extend access mothod
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	sf_access.bf.sflashForceBurst = 1;
++	sf_access.bf.sflashMIO = SF_ACCESS_MIO_QUARD;
++	sf_access.bf.sflashMData = 1;
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_READ_FROM_CACHE_X4;
++	/* 8 dummy bits */
++	sf_ext_access.bf.sflashDummyCount = 7;
++	/* 2 byte address */
++	sf_ext_access.bf.sflashAddrCount = 1;
++	/* 4 bytes in one command request */
++	sf_ext_access.bf.sflashDataCount = 3;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Fill address */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, offset);
++
++	/* Read out data */
++	while (len >= 4) {
++		/* Start access */
++		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++		/* Wait command ready */
++		if (wait_flash_cmd_rdy() != 0) {
++			printk("%s fail!\n", __func__);
++			return -1;
++		}
++		reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
++		*buf++ = reg_data & 0xFF;
++		*buf++ = (reg_data >> 8) & 0xFF;
++		*buf++ = (reg_data >> 16) & 0xFF;
++		*buf++ = (reg_data >> 24) & 0xFF;
++		len -= 4;
++	}
++
++	if (len > 0) {
++		/* Start access */
++		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++		/* Wait command ready */
++		if (wait_flash_cmd_rdy() != 0) {
++			printk("%s fail!\n", __func__);
++			return -1;
++		}
++
++		reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
++	}
++
++	switch (len) {
++		case 3:
++			*buf++ = reg_data & 0xFF;
++			*buf++ = (reg_data >> 8) & 0xFF;
++			*buf++ = (reg_data >> 16) & 0xFF;
++			break;
++		case 2:
++			*buf++ = reg_data & 0xFF;
++			*buf++ = (reg_data >> 8) & 0xFF;
++			break;
++		case 1:
++			*buf++ = reg_data & 0xFF;
++			break;
++		case 0:
++			break;
++		default:
++			printk("%s error length!\n", __func__);
++	}
++
++	/* Finish burst read  */
++	sf_access.bf.sflashForceBurst = 0;
++	sf_access.bf.sflashForceTerm = 1;
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	return 0;
++}
++
++#if 0
++int ca_spinand_read_oob(struct spi_flash *flash, u32 offset, void *buf)
++{
++	unsigned int page_id = offset / spinand_page_size;
++	unsigned int plane_select=0;
++	u8 *buff8 = buf;
++
++	if(priv_data->flags & PLANE_BIT)
++			plane_select = (page_id & priv_data->plane_select) ? priv_data->plane_select_bit : 0;
++
++	/* Read to cache */
++	if (spinand_read_to_cache(page_id) < 0) {
++		debug("%s read to cache fail, page:%d\n", __func__, page_id);
++		return -1;
++	}
++
++	/* Read from page head */
++	READ_FROM_CACHE(spinand_page_size | plane_select, spinand_oob_size, buf);
++	if (buff8[0] != 0xff)
++		debug("%x OOB:%x\n", offset, buff8[0]);
++
++	return 0;
++}
++
++static int ca_spinand_read(struct spi_flash *flash,
++						u32 offset, size_t len, void *buf)
++{
++	unsigned int page_id = offset / spinand_page_size;
++	unsigned int plane_select=0;
++
++	/* Handle head non-align part */
++	if (offset & spinand_page_sz_mask) {
++		debug("%s non-alignment read :0x%x", __func__, page_id);
++		if(priv_data->flags & PLANE_BIT)
++			plane_select = (page_id & priv_data->plane_select) ? priv_data->plane_select_bit : 0;
++
++		/* Read to cache */
++		if (spinand_read_to_cache(page_id) < 0) {
++			debug("%s read to cache fail, page:%d", __func__, page_id);
++			return -1;
++		}
++
++		/* Read from cache */
++		READ_FROM_CACHE((offset & spinand_page_sz_mask) | plane_select,
++						spinand_page_size - (offset & spinand_page_sz_mask),
++						buf);
++
++		len -= spinand_page_size - (offset & spinand_page_sz_mask);
++		buf += spinand_page_size - (offset & spinand_page_sz_mask);
++		offset += spinand_page_size - (offset & spinand_page_sz_mask);
++	}
++
++	while (len >= spinand_page_size) {
++		page_id = offset / spinand_page_size;
++		if(priv_data->flags & PLANE_BIT)
++			plane_select = (page_id & priv_data->plane_select) ? priv_data->plane_select_bit : 0;
++
++		/* Read to cache */
++		if (spinand_read_to_cache(page_id) < 0) {
++			debug("%s read to cache fail, page:%d", __func__, page_id);
++			return -1;
++		}
++
++		/* Read from page head */
++		READ_FROM_CACHE(0 | plane_select, spinand_page_size, buf);
++		buf += spinand_page_size;
++		offset += spinand_page_size;
++		len -= spinand_page_size;
++
++	}
++
++	/* Handle tail non-align part */
++	if (len > 0) {
++		page_id = offset / spinand_page_size;
++		if(priv_data->flags & PLANE_BIT)
++			plane_select = (page_id & priv_data->plane_select) ? priv_data->plane_select_bit : 0;
++
++		/* Read to cache */
++		if (spinand_read_to_cache(page_id) < 0) {
++			debug("%s read to cache fail, page:%d", __func__, page_id);
++			return -1;
++		}
++
++		/* Read from page head */
++		READ_FROM_CACHE(plane_select, len, buf);
++	}
++
++	return 0;
++}
++#endif
++
++static int ca_spinand_write_cache_x1(u32 offset, size_t len, const u8 *buf)
++{
++	unsigned int reg_data;
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	FLASH_FLASH_ACCESS_START_t access_start;
++	sf_access.wrd = 0;
++	sf_ext_access.wrd = 0;
++	access_start.wrd = 0;
++
++	/* Write to cache
++	 * Opcode -> 16bits offset addr -> data ....
++	 * 2 bytes address must rely on extend access mothod
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	sf_access.bf.sflashMIO = SF_ACCESS_MIO_SINGLE;
++	sf_access.bf.sflashMData = 0;
++	sf_access.bf.sflashForceBurst = 1;	/* Burst mode */
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_PROG_LOAD;
++	/* 0 dummy bits */
++	sf_ext_access.bf.sflashDummyCount = -1;
++	/* 2 byte address */
++	sf_ext_access.bf.sflashAddrCount = 1;
++	/* ECC is handled by device, we just push data  */
++	sf_ext_access.bf.sflashDataCount = 3;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Fill address */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, offset);
++
++	access_start.bf.sflashRegReq = 1;
++	access_start.bf.sflashRegCmd = 1;
++	/* Burst mode */
++	while (len > 0) {
++		reg_data = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
++		write_flash_ctrl_reg(FLASH_SF_DATA, reg_data);
++		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, access_start.wrd);
++
++		/* Wait command ready */
++		if (wait_flash_cmd_rdy() != 0) {
++			printk("%s timeout\n", __func__);
++			return -1;
++		}
++
++		len -= 4;
++		buf += 4;
++	}
++
++	sf_access.bf.sflashForceBurst = 0;
++	sf_access.bf.sflashForceTerm = 1;	/* Terminate burst mode */
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	return 0;
++}
++
++static int ca_spinand_write_cache_x4(u32 offset, size_t len, const u8 *buf)
++{
++	unsigned int reg_data;
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	FLASH_FLASH_ACCESS_START_t access_start;
++	sf_access.wrd = 0;
++	sf_ext_access.wrd = 0;
++	access_start.wrd = 0;
++
++	/* Write to cache
++	 * Opcode -> 16bits offset addr -> data ....
++	 * 2 bytes address must rely on extend access mothod
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	sf_access.bf.sflashMIO = SF_ACCESS_MIO_QUARD;
++	sf_access.bf.sflashMData = 1;
++	sf_access.bf.sflashForceBurst = 1;	/* Burst mode */
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_PROG_LOAD_X4;
++	/* 0 dummy bits */
++	sf_ext_access.bf.sflashDummyCount = -1;
++	/* 2 byte address */
++	sf_ext_access.bf.sflashAddrCount = 1;
++	/* 4 bytes in one command request */
++	sf_ext_access.bf.sflashDataCount = 3;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Fill address */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, offset);
++
++	access_start.bf.sflashRegReq = 1;
++	access_start.bf.sflashRegCmd = 1;
++	/* Burst mode */
++	while (len > 0) {
++		reg_data = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
++		write_flash_ctrl_reg(FLASH_SF_DATA, reg_data);
++		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, access_start.wrd);
++
++		/* Wait command ready */
++		if (wait_flash_cmd_rdy() != 0) {
++			printk("%s timeout\n", __func__);
++			return -1;
++		}
++
++		len -= 4;
++		buf += 4;
++	}
++
++	sf_access.bf.sflashForceBurst = 0;
++	sf_access.bf.sflashForceTerm = 1;	/* Terminate burst mode */
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	return 0;
++}
++
++static int ca_spinand_program_execute(u32 offset)
++{
++	FLASH_SF_ACCESS_t sf_access;
++	FLASH_FLASH_ACCESS_START_t access_start;
++	FLASH_SF_EXT_ACCESS_t sf_ext_access;
++	sf_access.wrd = 0;
++	access_start.wrd = 0;
++	sf_ext_access.wrd = 0;
++
++	/* Flush cache to flash chip
++	 * Opcode -> 24bits offset addr
++	 */
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_EXTEND);
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++
++	/* Use command in extend_acc register */
++	sf_ext_access.bf.sflashDirRdCmdEn = 1;
++	sf_ext_access.bf.sflashOpCode = SPINAND_CMD_PROG_EXC;
++	/* 0 dummy bits */
++	sf_ext_access.bf.sflashDummyCount = -1;
++	/* 3 byte address */
++	sf_ext_access.bf.sflashAddrCount = 2;
++	/* zero data byte */
++	sf_ext_access.bf.sflashDataCount = -1;
++	write_flash_ctrl_reg(FLASH_SF_EXT_ACCESS, sf_ext_access.wrd);
++
++	/* Fill address */
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, offset);
++
++	write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++	/* Wait command ready */
++	if (wait_flash_cmd_rdy() != 0) {
++		printk("%s fail!\n", __func__);
++		return -1;
++	}
++
++	return 0;
++}
++
++#if 0
++int ca_spinand_write_page(u32 page_id, size_t len, unsigned char *buf)
++{
++	u32 plane_select=0;
++
++	if(priv_data->flags & PLANE_BIT)
++			plane_select = (page_id & priv_data->plane_select) ? priv_data->plane_select_bit : 0;
++
++	/* 06h (WRITE ENABLE command)
++	 * 02h (PROGRAM LOAD command) or 32h to load x4(multi-IO)
++	 * 10h (PROGRAM EXECUTE command)
++	 * 0Fh (GET FEATURES command to read the status)
++	 */
++
++	/* Enable write */
++	spinand_write_enable();
++
++	/* Write data to cache
++	 * Could be x1(02h) or x4(32h)
++	 */
++	WRITE_TO_CACHE(0 | plane_select, len, buf);
++
++	/* Program execute */
++	spinand_program_execute(page_id);
++
++	/* Wait until program finish */
++	if (wait_till_ready()) {
++		debug("%s wait timeout 0x%x!\n", __func__, page_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++static int ca_spinand_write(struct spi_flash *flash,
++						 u32 offset, size_t len, const void *buf)
++{
++	unsigned char *src = (unsigned char *)buf;
++	unsigned char oob[spinand_oob_size];
++	unsigned int good_page_count;
++
++   /* Sanity check */
++	if (offset & spinand_page_sz_mask) {
++		debug("Non alignment write(ADDR 0x%x) not supported! (0x%x)\n", offset, spinand_page_size);
++		return -1;
++	}
++
++	if (len % spinand_page_size) {
++		debug("Non alignment write(SIZE) not supported!\n");
++		return -1;
++	}
++
++	/*support skip bad block*/
++	while (len > 0) {
++next_block:
++		//spinand_read_oob(flash, offset, oob);
++		if ((spinand_read_oob(flash, offset, oob) != 0) || (oob[0] != 0xff)) {
++			offset += spinand_blk_size;
++			if (offset >= spinand_dev_size) {
++					debug("%s Cannot find a good block!\n", __func__);
++				return -1;
++			}
++			goto next_block;
++		}
++
++		good_page_count = spinand_page_per_blk - ((offset & spinand_blk_size_mask) / spinand_page_size);
++		debug("%s program block_id %d page_id %d good_page_count %d!\n", __func__, offset / spinand_blk_size, offset / spinand_page_size, good_page_count);
++		while ((good_page_count > 0) && (len>0)) {
++			spinand_write_page(offset / spinand_page_size, spinand_page_size, src);
++			offset += spinand_page_size;
++			src += spinand_page_size;
++			len -= spinand_page_size;
++	os
++			good_page_count--;
++		}
++	}
++
++	return len > 0 ? -1 : 0;
++}
++
++static int ca_spinand_write_oob(struct spi_flash *flash,
++						 u32 offset, unsigned char value)
++{
++	unsigned char src[4];
++	u32 plane_select;
++	u32 page_id;
++
++	/* Sanity check */
++	if (offset & spinand_page_sz_mask) {
++		debug("Non alignment write(ADDR) not supported!\n");
++		return -1;
++	}
++
++	page_id = offset / spinand_page_size;
++	if(priv_data->flags & PLANE_BIT)
++			plane_select = (page_id & priv_data->plane_select) ? priv_data->plane_select_bit : 0;
++
++	/* 06h (WRITE ENABLE command)
++	 * 02h (PROGRAM LOAD command) or 32h to load x4(multi-IO)
++	 * 10h (PROGRAM EXECUTE command)
++	 * 0Fh (GET FEATURES command to read the status)
++	 */
++	/* Enable write */
++	spinand_write_enable();
++
++	/* Write data to cache
++	 * Could be x1(02h) or x4(32h)
++	 */
++
++	src[0] = value;
++	src[1] = value;
++	src[2] = value;
++	src[3] = value;
++	//WRITE_TO_CACHE(spinand_page_size | plane_select, 1, src);
++	spinand_write_cache_x1(spinand_page_size | plane_select, 4, src);
++
++	/* Program execute */
++	spinand_program_execute(page_id);
++
++	/* Wait until program finish */
++	if (wait_till_ready()) {
++		debug("%s wait timeout page_id 0x%x!\n", __func__, page_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++#endif
++
++static int ca_spinand_erase_block(u32 block_id)
++{
++	FLASH_SF_ACCESS_t sf_access;
++	sf_access.wrd = 0;
++
++	/* Enable write */
++	ca_spinand_write_enable();
++
++	/* Erase block
++	 * Opcode -> 24bits Addr
++	 */
++	sf_access.bf.sflashOpCode = SPINAND_CMD_BLK_ERASE;
++	sf_access.bf.sflashAcCode = GET_UP8BITS(SF_AC_OPCODE_4_ADDR);
++	write_flash_ctrl_reg(FLASH_SF_ACCESS, sf_access.wrd);
++	write_flash_ctrl_reg(FLASH_SF_ADDRESS, block_id);
++	write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
++
++	/* Wait command ready */
++	if (wait_flash_cmd_rdy() != 0) {
++		printk("%s fail!\n", __func__);
++		return -1;
++	}
++
++	/* elapse 1ms before issuing any other command */
++	udelay(10);
++
++	if (wait_till_ready()) {
++		printk("%s wait timeout %d!\n", __func__, block_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++#if 0
++int ca_spinand_erase(struct spi_flash *flash, u32 offset, size_t len)
++{
++	unsigned int block_id;
++
++    do{
++		block_id = offset / spinand_page_size;
++		if (spinand_erase_block(block_id)){
++			return -1;
++        }
++
++        if(len < spinand_blk_size){
++            break;
++        }
++
++		len -= spinand_blk_size;
++		offset += spinand_blk_size;
++	}while(1);
++
++	return 0;
++}
++#endif
++
++#define ONFI_CRC_BASE	0x4F4E
++static u16 onfi_crc16(u16 crc, u8 const *p, size_t len)
++{
++	int i;
++	while (len--) {
++		crc ^= *p++ << 8;
++		for (i = 0; i < 8; i++)
++			crc = (crc << 1) ^ ((crc & 0x8000) ? 0x8005 : 0);
++	}
++
++	return crc;
++}
++
++#if 0
++static void ca_spinand_get_paramet_page(void)
++{
++	u8 stat_reg;
++	u16 crc, crc2;
++	u8 *param_buff = malloc(2048);
++	unsigned int pages_per_block;
++	unsigned int number_of_block;
++	struct nand_onfi_params *p = param_buff;
++
++	/* Set feature to OTP access */
++	spinand_read_otp_status(&stat_reg);
++	stat_reg |= PARAM_READ_EN;
++	spinand_set_feature_reg(REG_OTP, stat_reg);
++
++	/* Read to cache */
++	if(spinand_read_to_cache(0x01)<0)
++		debug("%s read Parameter fail\n", __func__);
++
++	/* Read from cache */
++	READ_FROM_CACHE(0, 2048, param_buff);
++
++	/* Disable OTP access */
++	stat_reg &= ~PARAM_READ_EN;
++	spinand_set_feature_reg(REG_OTP, stat_reg);
++
++	crc = param_buff[254] | (param_buff[255]<<8);
++	crc2 = onfi_crc16(ONFI_CRC_BASE, (u8*)p, 254);
++	if (crc2 != crc){
++		printf("CRC error in ONFI!! %x %x\n",crc, crc2 );
++		/* Wrong CRC! Give up parameters from ONFI */
++		free(param_buff);
++		return;
++	}
++
++	spinand_oob_size = param_buff[84] | (param_buff[85]<<8);
++	spinand_page_size = param_buff[80] | (param_buff[81]<<8) | \
++						(param_buff[82]<<16) | (param_buff[83]<<24);
++	pages_per_block = param_buff[92] | (param_buff[93]<<8);
++	spinand_blk_size = spinand_page_size * pages_per_block;
++
++	number_of_block = param_buff[96] | (param_buff[97]<<8) | \
++					 (param_buff[98]<<16) | (param_buff[99]<<24);
++	sflash_size = number_of_block * spinand_blk_size * param_buff[100];
++
++	param_buff[63] = 0;
++	memcpy(sflash_info->name, &param_buff[44], 20);
++
++	free(param_buff);
++}
++
++static struct spi_device_id *cortina_jedec_probe(unsigned char *id)
++{
++	u32		i;
++	u16		jedec = (id[0]<<8) | (id[1]);
++	struct flash_info	*info;
++
++	for (i = 0; i < ARRAY_SIZE(snand_ids) - 1; i++) {
++		info = (void *)snand_ids[i].driver_data;
++		if (info->jedec_id == jedec)
++			return &snand_ids[i];
++	}
++
++	printf("SPI-NAND: Unrecognized id %02x:%02x\n", id[0], id[1]);
++
++	return NULL;
++}
++#endif
++/*
++ * ca_spinand_cmd_fn - to process a command to send to the SPI-NAND
++ * by cortina SPI NAND controller
++ * @chip: SPI-NAND device structure
++ * @cmd: command structure
++ * Description:
++ *   Set up the command buffer to send to the SPI controller.
++ *   The command buffer has to initialized to 0.
++ */
++static int ca_spinand_cmd_fn(struct spi_nand_chip *chip,
++				struct spi_nand_cmd *cmd)
++{
++	struct spi_nand_cmd_cfg *cmd_cfg = spi_nand_get_cmd_cfg(cmd->cmd);
++	u32 page_id, offset, block_id;
++	int ret = 0;
++
++	/*
++     * Select the related cmds:
++     */
++	switch (cmd_cfg->opcode) {
++		case SPINAND_CMD_RESET:
++			ret = ca_spinand_reset();
++			break;
++		case SPINAND_CMD_GET_FEATURE:
++			ret = ca_spinand_get_feature_reg(cmd->addr[0], cmd->rx_buf);
++			break;
++		case SPINAND_CMD_SET_FEATURE:
++			ret = ca_spinand_set_feature_reg(cmd->addr[0], cmd->tx_buf);
++			break;
++		case SPINAND_CMD_PAGE_READ:
++			page_id = (u32)(cmd->addr[0] << 16) |
++				(u32)(cmd->addr[1] << 8) | (u32)(cmd->addr[2]);
++			ret = ca_spinand_read_page_to_cache(page_id);
++			break;
++		case SPINAND_CMD_READ_PAGE_CACHE_RDM:
++			/* Todo */
++			break;
++		case SPINAND_CMD_READ_PAGE_CACHE_LAST:
++			/* Todo */
++			break;
++		case SPINAND_CMD_READ_FROM_CACHE:
++			break;
++		case SPINAND_CMD_READ_FROM_CACHE_FAST:
++			offset = (u32)(cmd->addr[0] << 8) | (u32)(cmd->addr[1]);
++			ret = ca_spinand_read_cache_x1(offset, cmd->n_rx, cmd->rx_buf);
++			break;
++		case SPINAND_CMD_READ_FROM_CACHE_X2:
++			offset = (u32)(cmd->addr[0] << 8) | (u32)(cmd->addr[1]);
++			ret = ca_spinand_read_cache_x2(offset, cmd->n_rx, cmd->rx_buf);
++			break;
++		case SPINAND_CMD_READ_FROM_CACHE_DUAL_IO:
++			/* Todo */
++			break;
++		case SPINAND_CMD_READ_FROM_CACHE_X4:
++			offset = (u32)(cmd->addr[0] << 8) | (u32)(cmd->addr[1]);
++			ret = ca_spinand_read_cache_x4(offset, cmd->n_rx, cmd->rx_buf);
++			break;
++		case SPINAND_CMD_READ_FROM_CACHE_QUAD_IO:
++			/* Todo */
++			break;
++		case SPINAND_CMD_BLK_ERASE:
++			block_id = (u32)(cmd->addr[0] << 16) |
++				(u32)(cmd->addr[1] << 8) | (u32)(cmd->addr[2]);
++			ret = ca_spinand_erase_block(block_id);
++			break;
++		case SPINAND_CMD_PROG_EXC:
++			offset = (u32)(cmd->addr[0] << 16) |
++				(u32)(cmd->addr[1] << 8) | (u32)(cmd->addr[2]);
++			ret = ca_spinand_program_execute(offset);
++			break;
++		case SPINAND_CMD_PROG_LOAD:
++			offset = (u32)(cmd->addr[0] << 8) | (u32)(cmd->addr[1]);
++			ret = ca_spinand_write_cache_x1(offset, cmd->n_tx, cmd->tx_buf);
++			break;
++		case SPINAND_CMD_PROG_LOAD_RDM_DATA:
++			/* Todo */
++			break;
++		case SPINAND_CMD_PROG_LOAD_X4:
++			offset = (u32)(cmd->addr[0] << 8) | (u32)(cmd->addr[1]);
++			ret = ca_spinand_write_cache_x4(offset, cmd->n_tx, cmd->tx_buf);
++			break;
++		case SPINAND_CMD_PROG_LOAD_RDM_DATA_X4:
++			/* Todo */
++			break;
++		case SPINAND_CMD_READ_ID:
++			ret = ca_spinand_read_id(cmd->rx_buf);
++			break;
++		case SPINAND_CMD_WR_DISABLE:
++			/* Todo */
++			break;
++		case SPINAND_CMD_WR_ENABLE:
++			ret = ca_spinand_write_enable();
++			break;
++		case SPINAND_CMD_END:
++		default:
++			break;
++	}
++
++    return ret;
++}
++
++#ifdef CONFIG_OF
++static struct of_device_id ca_spinand_dt_ids[] = {
++    {.compatible = "cortina,spi-nand",},
++    {},
++};
++
++MODULE_DEVICE_TABLE(of, ca_spi_nand_dt_ids);
++#endif
++
++static int ca_spinand_probe(struct platform_device *pdev)
++{
++	struct resource mem_resource;
++	const struct of_device_id *match;
++	struct device_node *np = pdev->dev.of_node;
++	struct spi_nand_chip *chip;
++	struct mtd_info *mtd;
++	struct mtd_part_parser_data ppdata;
++	const char *mfr_name = NULL;
++	u16 spi_mode;
++	int mfr_id, ret;
++
++	match = of_match_device(ca_spinand_dt_ids, &pdev->dev);
++	if (!match)
++		return -EINVAL;
++
++	dev_notice(&pdev->dev, "Cortina-Access SPI-NAND Flash driver\n");
++
++	/* SPI Nand Flash Controller addr base */
++	ret = of_address_to_resource(np, 0, &mem_resource);
++	if (ret) {
++		dev_warn(&pdev->dev, "invalid address %d\n", ret);
++		return ret;
++	}
++
++	flash_ctl_base = devm_ioremap(&pdev->dev, mem_resource.start,
++		resource_size(&mem_resource));
++
++	chip = kzalloc(sizeof(struct spi_nand_chip), GFP_KERNEL);
++	if (!chip) {
++		ret = -ENOMEM;
++		goto err1;
++	}
++
++	mtd = kzalloc(sizeof(struct mtd_info), GFP_KERNEL);
++	if (!mtd) {
++		ret = -ENOMEM;
++		goto err2;
++	}
++
++	mtd->priv = chip;
++	chip->mtd = mtd;
++	chip->command_fn = ca_spinand_cmd_fn;
++
++	of_property_read_u16(np, "spinand,spi-mode", &spi_mode);
++	if (spi_mode & SPI_RX_QUAD)
++		chip->controller_caps |= SPINAND_RX_QUAD;
++	if (spi_mode & SPI_RX_DUAL)
++		chip->controller_caps |= SPINAND_RX_DUAL;
++	if (spi_mode & SPI_TX_QUAD)
++		chip->controller_caps |= SPINAND_TX_QUAD;
++	if (spi_mode & SPI_TX_DUAL)
++		chip->controller_caps |= SPINAND_TX_DUAL;
++	chip->priv = NULL;
++
++	/*
++	 * read ID command format might be different for different manufactory
++	 * such as, Micron SPI NAND need extra one dummy byte after perform
++	 * read ID command but Giga device don't need.
++	 *
++	 * So, specify manufactory of device in device tree is obligatory
++	 */
++	of_property_read_string(np, "spinand,mfr-name", &mfr_name);
++	if (!strncmp(mfr_name, "micron", 6)) {
++		mfr_id = SPINAND_MFR_MICRON;
++	} else if (!strncmp(mfr_name, "gigadevice", 10)) {
++		mfr_id = SPINAND_MFR_GIGADEVICE;
++	}
++	else {
++		printk("Unknown SPI-NAND Device Manufactory ID!\n");
++		goto err3;
++	}
++
++	printk("SPI-NAND flash mfr-name: %s, mdr_id: 0x%x\n",
++		mfr_name, mfr_id);
++	ret = spi_nand_set_cmd_cfg_table(mfr_id);
++	if (ret)
++		goto err3;
++
++	ret = spi_nand_scan_ident(mtd);
++	if (ret)
++		goto err3;
++
++	spi_nand_manufacture_init(chip);
++	ret = spi_nand_scan_tail(mtd);
++	if (ret)
++		goto err4;
++
++	ppdata.of_node = pdev->dev.of_node;
++
++	ret = mtd_device_parse_register(mtd, NULL, &ppdata, NULL, 0);
++	if (!ret)
++		return 0;
++
++	spi_nand_scan_tail_release(mtd);
++err4:
++	spi_nand_scan_ident_release(mtd);
++err3:
++	kfree(mtd);
++err2:
++	kfree(chip);
++err1:
++	return ret;
++}
++
++static int ca_spinand_remove(struct platform_device *pdev)
++{
++	/* ToDo */
++	return 0;
++}
++
++static struct platform_driver ca_spinand_driver = {
++	.probe	= ca_spinand_probe,
++	.remove	= ca_spinand_remove,
++	.driver = {
++		.owner = THIS_MODULE,
++		.name = "ca_spi_nand",
++		.of_match_table = of_match_ptr(ca_spinand_dt_ids),
++	},
++};
++
++static int __init ca_spinand_init(void)
++{
++	return platform_driver_register(&ca_spinand_driver);
++}
++
++static void __exit ca_spinand_exit(void)
++{
++	platform_driver_unregister(&ca_spinand_driver);
++}
++
++module_init(ca_spinand_init);
++module_exit(ca_spinand_exit);
++
++MODULE_DESCRIPTION("Cortina Access SPI-NAND Flash Controller Driver");
++MODULE_AUTHOR("Pengpeng.Chen<pengpeng.chen@cortina-access.com>");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/mtd/spi-nand/spi-nand-base.c b/drivers/mtd/spi-nand/spi-nand-base.c
+index 75b03b7..7f004d4 100755
+--- a/drivers/mtd/spi-nand/spi-nand-base.c
++++ b/drivers/mtd/spi-nand/spi-nand-base.c
+@@ -1677,7 +1677,7 @@ static int spi_nand_block_markbad(struct mtd_info *mtd, loff_t ofs)
+  * @einfo: erase instruction
+  * @allowbbt: allow to access bbt
+  *
+- * Erase one ore more blocks
++ * Erase one or more blocks
+  */
+ static int __spi_nand_erase(struct mtd_info *mtd, struct erase_info *einfo,
+ 			int allowbbt)
+diff --git a/drivers/mtd/spi-nand/spi-nand-cmd.c b/drivers/mtd/spi-nand/spi-nand-cmd.c
+index 003d521..ff21e44 100755
+--- a/drivers/mtd/spi-nand/spi-nand-cmd.c
++++ b/drivers/mtd/spi-nand/spi-nand-cmd.c
+@@ -79,9 +79,9 @@ struct spi_nand_cmd_cfg *spi_nand_get_cmd_cfg(u8 opcode)
+ 	BUG();
+ }
+ 
+-int spi_nand_set_cmd_cfg_table(int mfr)
++int spi_nand_set_cmd_cfg_table(int mfr_id)
+ {
+-	switch (mfr) {
++	switch (mfr_id) {
+ 	case SPINAND_MFR_MICRON:
+ 		cmd_table = micron_cmd_cfg_table;
+ 		break;
+diff --git a/include/linux/mtd/spi-nand.h b/include/linux/mtd/spi-nand.h
+index a682fb2..1443af9 100755
+--- a/include/linux/mtd/spi-nand.h
++++ b/include/linux/mtd/spi-nand.h
+@@ -25,33 +25,33 @@
+ /*
+  * Standard SPI-NAND flash commands
+  */
+-#define SPINAND_CMD_RESET			0xff
+-#define SPINAND_CMD_GET_FEATURE			0x0f
+-#define SPINAND_CMD_SET_FEATURE			0x1f
+-#define SPINAND_CMD_PAGE_READ			0x13
+-#define SPINAND_CMD_READ_PAGE_CACHE_RDM		0x30
++#define SPINAND_CMD_RESET			0xff /* CMD_RESET */
++#define SPINAND_CMD_GET_FEATURE		0x0f /* CMD_READ_REG */
++#define SPINAND_CMD_SET_FEATURE		0x1f /* CMD_WRITE_REG */
++#define SPINAND_CMD_PAGE_READ			0x13 /* CMD_READ */
++#define SPINAND_CMD_READ_PAGE_CACHE_RDM	0x30
+ #define SPINAND_CMD_READ_PAGE_CACHE_LAST	0x3f
+ #define SPINAND_CMD_READ_FROM_CACHE		0x03
+-#define SPINAND_CMD_READ_FROM_CACHE_FAST	0x0b
+-#define SPINAND_CMD_READ_FROM_CACHE_X2		0x3b
++#define SPINAND_CMD_READ_FROM_CACHE_FAST	0x0b /* CMD_READ_RDM */
++#define SPINAND_CMD_READ_FROM_CACHE_X2		0x3b /* CMD_READ_RDM_X2 */
+ #define SPINAND_CMD_READ_FROM_CACHE_DUAL_IO	0xbb
+-#define SPINAND_CMD_READ_FROM_CACHE_X4		0x6b
++#define SPINAND_CMD_READ_FROM_CACHE_X4		0x6b /* CMD_READ_RDM_X4 */
+ #define SPINAND_CMD_READ_FROM_CACHE_QUAD_IO	0xeb
+-#define SPINAND_CMD_BLK_ERASE			0xd8
+-#define SPINAND_CMD_PROG_EXC			0x10
+-#define SPINAND_CMD_PROG_LOAD			0x02
+-#define SPINAND_CMD_PROG_LOAD_RDM_DATA		0x84
+-#define SPINAND_CMD_PROG_LOAD_X4		0x32
++#define SPINAND_CMD_BLK_ERASE			0xd8 /* CMD_ERASE_BLK */
++#define SPINAND_CMD_PROG_EXC			0x10 /* CMD_PROG_PAGE_EXC */
++#define SPINAND_CMD_PROG_LOAD			0x02 /* CMD_PROG_PAGE_CLRCACHE */
++#define SPINAND_CMD_PROG_LOAD_RDM_DATA	0x84 /* CMD_PROG_PAGE */
++#define SPINAND_CMD_PROG_LOAD_X4		0x32 /* CMD_PROG_PAGE_CLRCACHE_X4 */
+ #define SPINAND_CMD_PROG_LOAD_RDM_DATA_X4	0x34
+-#define SPINAND_CMD_READ_ID			0x9f
+-#define SPINAND_CMD_WR_DISABLE			0x04
+-#define SPINAND_CMD_WR_ENABLE			0x06
+-#define SPINAND_CMD_END				0x0
++#define SPINAND_CMD_READ_ID			0x9f /* CMD_READ_ID */
++#define SPINAND_CMD_WR_DISABLE			0x04 /* CMD_WR_DISABLE */
++#define SPINAND_CMD_WR_ENABLE			0x06 /* CMD_WR_ENABLE */
++#define SPINAND_CMD_END					0x0
+ 
+ 
+ /* feature registers */
+ #define REG_BLOCK_LOCK		0xa0
+-#define REG_CFG			0xb0
++#define REG_CFG			0xb0 /* REG_OTP */
+ #define REG_STATUS		0xc0
+ #define REG_DIE_SELECT		0xd0
+ 
+@@ -61,6 +61,11 @@
+ #define STATUS_READY		(0 << 0)
+ #define STATUS_BUSY		(1 << 0)
+ 
++#define STATUS_ECC_MASK		0x30
++#define STATUS_ECC_1BIT_CORRECTED	(1 << 4)
++#define STATUS_ECC_ERROR		(2 << 4)
++#define STATUS_ECC_RESERVED		(3 << 4)
++
+ #define STATUS_E_FAIL_MASK	0x04
+ #define STATUS_E_FAIL		(1 << 2)
+ 
+diff --git a/include/soc/cortina/ca_flash.h b/include/soc/cortina/ca_flash.h
+index 6c59ced..b3b3103 100755
+--- a/include/soc/cortina/ca_flash.h
++++ b/include/soc/cortina/ca_flash.h
+@@ -106,6 +106,7 @@
+ #define SF_AC_OPCODE_4_ADDR_X_3_DATA   	0x0C00
+ #define SF_AC_OPCODE_4_ADDR_X_4_DATA   	0x0D00
+ #define SF_AC_OPCODE_4_ADDR_4X_1_DATA  	0x0E00
++#define SF_AC_OPCODE_EXTEND			0x0F00
+ 
+ //status register
+ //for atmel
+-- 
+1.8.3.1
+

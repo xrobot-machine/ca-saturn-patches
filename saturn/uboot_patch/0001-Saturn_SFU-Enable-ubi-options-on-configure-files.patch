@@ -1,0 +1,39 @@
+From 1b70ec0a323c37be86864ddaea06522b3baeb603 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Tue, 24 Oct 2017 16:18:00 +0800
+Subject: [PATCH] Saturn_SFU: Enable ubi options on configure files.
+
+Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+---
+ conf/machine/saturn-sfu-eng.conf                                     | 5 +++++
+ .../packagegroups/packagegroup-saturn-sfu-eng-major-image.bb         | 1 +
+ 2 files changed, 6 insertions(+)
+
+diff --git a/conf/machine/saturn-sfu-eng.conf b/conf/machine/saturn-sfu-eng.conf
+index 01fa099..7b1ff5c 100644
+--- a/conf/machine/saturn-sfu-eng.conf
++++ b/conf/machine/saturn-sfu-eng.conf
+@@ -39,3 +39,8 @@ IMAGE_BOOT_FILES ?= "u-boot.${UBOOT_SUFFIX}"
+ 
+ USE_VT = '0'
+ CA_TARGET = "saturn_sfu"
++
++IMAGE_FSTYPES += "ubi"
++MKUBIFS_ARGS = "--min-io-size=2048 --leb-size=126976 --max-leb-cnt=768 -U -x zlib --space-fixup"
++UBI_VOLNAME = "rootfs"
++UBINIZE_ARGS = "--min-io-size=2048 --peb-size=128KiB --sub-page-size=2048"
+diff --git a/recipes-core/packagegroups/packagegroup-saturn-sfu-eng-major-image.bb b/recipes-core/packagegroups/packagegroup-saturn-sfu-eng-major-image.bb
+index 1b97d33..79d878a 100644
+--- a/recipes-core/packagegroups/packagegroup-saturn-sfu-eng-major-image.bb
++++ b/recipes-core/packagegroups/packagegroup-saturn-sfu-eng-major-image.bb
+@@ -26,6 +26,7 @@ ca_packages = "\
+ "
+ 3rd_packages = "\
+     rtl83xx \
++    mtd-utils-ubifs \
+ "
+ 
+ RDEPENDS_packagegroup-saturn-sfu-eng-major-image = " \
+-- 
+1.8.3.1
+

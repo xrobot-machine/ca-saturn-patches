@@ -1,0 +1,65 @@
+From bb557107a7e09f3040de92cbc54393ef1c82bfc9 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Wed, 25 Oct 2017 18:22:30 +0800
+Subject: [PATCH 3/4] Saturn_SFU: SPI-NAND: Support Macronix/TOSHIBA SPI-NAND
+ flash.
+
+Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+---
+ drivers/mtd/spi-nand/cortina_spi_nand.c | 8 ++++----
+ drivers/mtd/spi-nand/spi-nand-base.c    | 6 ++++++
+ include/spi-nand.h                      | 2 ++
+ 3 files changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/mtd/spi-nand/cortina_spi_nand.c b/drivers/mtd/spi-nand/cortina_spi_nand.c
+index 589fef1..12c4599 100755
+--- a/drivers/mtd/spi-nand/cortina_spi_nand.c
++++ b/drivers/mtd/spi-nand/cortina_spi_nand.c
+@@ -1250,10 +1250,10 @@ struct spi_nand_chip *spi_nand_flash_probe(unsigned int bus, unsigned int cs,
+ 	}
+ 
+ 	spi_nand_debug("%s\n",chip->name);
+-	spi_nand_debug("spinand_oob_size:0x%x\n",chip->oob_size);
+-	spi_nand_debug("spinand_page_size:0x%x\n",chip->page_size);
+-	spi_nand_debug("spinand_blk_size:0x%x\n",chip->block_size);
+-	spi_nand_debug("spinand_size:0x%x\n",chip->size);
++	spi_nand_debug("spinand_oob_size:0x%x\n", chip->oob_size);
++	spi_nand_debug("spinand_page_size:0x%x\n", chip->page_size);
++	spi_nand_debug("spinand_blk_size:0x%x\n", chip->block_size);
++	spi_nand_debug("spinand_size:0x%llx\n", chip->size);
+ 
+ 	return chip;
+ }
+diff --git a/drivers/mtd/spi-nand/spi-nand-base.c b/drivers/mtd/spi-nand/spi-nand-base.c
+index d5a69ad..8fe23e6 100755
+--- a/drivers/mtd/spi-nand/spi-nand-base.c
++++ b/drivers/mtd/spi-nand/spi-nand-base.c
+@@ -35,6 +35,12 @@ static struct spi_nand_flash spi_nand_table[] = {
+ 			2, 8, SPINAND_NEED_PLANE_SELECT | SPINAND_NEED_DIE_SELECT),
+ 	SPI_NAND_INFO("MT29F2G01ABAGD", 0x2C, 0x24, 2048, 128, 64, 2048,
+ 			1, 8, SPINAND_NEED_PLANE_SELECT),
++
++	/* Macronix */
++	SPI_NAND_INFO("MX35LF1GE4AB", 0xC2, 0x12, 2048, 64, 64, 1024,
++			1, 4, 0),
++	SPI_NAND_INFO("MX35LF2GE4AB", 0xC2, 0x22, 2048, 64, 64, 2048,
++			1, 4, 0),
+ 	{.name = NULL},
+ };
+ 
+diff --git a/include/spi-nand.h b/include/spi-nand.h
+index be80f6d..2bbd0ab 100755
+--- a/include/spi-nand.h
++++ b/include/spi-nand.h
+@@ -291,6 +291,8 @@ enum {
+ 
+ #define SPINAND_MFR_MICRON		0x2C
+ #define SPINAND_MFR_GIGADEVICE	0xC8
++#define SPINAND_MFR_MACRONIX	0xC2
++#define SPINAND_MFR_TOSHIBA		0x98
+ #define SPINAND_MAX_ID_LEN		2
+ 
+ #ifdef DEBUG
+-- 
+1.8.3.1
+

@@ -1,0 +1,33 @@
+From 0643a279141ce549f12cb34e8fd95ab26cd12b8d Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Tue, 24 Oct 2017 16:24:20 +0800
+Subject: [PATCH] Saturn_SFU: uopdate for spinand partions in devicetree.
+
+Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+---
+ arch/mips/boot/dts/cortina/saturn_spinand.dtsi | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/mips/boot/dts/cortina/saturn_spinand.dtsi b/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+index 6ef8269..5028c0e 100755
+--- a/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
++++ b/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+@@ -58,12 +58,12 @@
+ 
+ 		rootfs@A00000 {
+ 			label = "rootfs";
+-			reg = <0xA00000 0xF000000>;
++			reg = <0xA00000 0x6000000>;
+ 		};
+ 
+-		userdata@FA00000 {
++		userdata@6A00000 {
+ 			label = "userdata";
+-			reg = <0xFA00000 0x400000>;
++			reg = <0x6A00000 0x400000>;
+ 		};
+ 	};
+ };
+-- 
+1.8.3.1
+

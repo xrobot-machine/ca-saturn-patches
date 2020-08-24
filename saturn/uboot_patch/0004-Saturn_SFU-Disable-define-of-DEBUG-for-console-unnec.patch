@@ -1,0 +1,251 @@
+From 2dab35b6a97c46a09e39ccd6d680348623a702db Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Thu, 26 Oct 2017 10:54:15 +0800
+Subject: [PATCH 4/4] Saturn_SFU: Disable define of DEBUG for console
+ unnecessary print massages.
+
+Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+---
+ drivers/mtd/spi-nand/cortina_spi_nand.c | 56 ++++++++++++++++-----------------
+ include/configs/saturn-asic.h           |  2 +-
+ 2 files changed, 29 insertions(+), 29 deletions(-)
+
+diff --git a/drivers/mtd/spi-nand/cortina_spi_nand.c b/drivers/mtd/spi-nand/cortina_spi_nand.c
+index 12c4599..19fe20b 100755
+--- a/drivers/mtd/spi-nand/cortina_spi_nand.c
++++ b/drivers/mtd/spi-nand/cortina_spi_nand.c
+@@ -462,7 +462,7 @@ static int ca_spinand_write_enable(struct spi_nand_cmd *cmd)
+ 
+ 	/* Wait command ready */
+ 	if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0)
+-		printk("%s: command timeout!\n", __func__);
++		printf("%s: command timeout!\n", __func__);
+ 
+ 	return 0;
+ }
+@@ -489,7 +489,7 @@ static int ca_spinand_reset(struct spi_nand_cmd *cmd)
+ 
+     /* Wait command ready */
+     if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-		printk("%s fail!\n", __func__);
++		printf("%s fail!\n", __func__);
+ 		return -1;
+     }
+ 
+@@ -497,7 +497,7 @@ static int ca_spinand_reset(struct spi_nand_cmd *cmd)
+     udelay(1000);
+ 
+     if (wait_till_ready())
+-		printk("%s wait timeout!\n", __func__);
++		printf("%s wait timeout!\n", __func__);
+ 
+     return 0;
+ }
+@@ -545,7 +545,7 @@ static int ca_spinand_read_id(struct spi_nand_cmd *cmd)
+ 	}
+ 
+ 	reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
+-	printk("SPI_NAND ID: 0x%x\n", reg_data);
++	printf("SPI_NAND ID: 0x%x\n", reg_data);
+ 
+ 	if (id[0] != SPINAND_MFR_GIGADEVICE) {
+ 		id[0] = (reg_data & 0x0000ff00) >> 8;
+@@ -595,7 +595,7 @@ static int ca_spinand_read_page_to_cache(struct spi_nand_cmd *cmd)
+ 
+ 	/* Wait command ready */
+ 	if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-		printk("%s fail!\n", __func__);
++		printf("%s fail!\n", __func__);
+ 		return -1;
+ 	}
+ 
+@@ -603,18 +603,18 @@ static int ca_spinand_read_page_to_cache(struct spi_nand_cmd *cmd)
+ 	udelay(10);
+ 
+ 	if (wait_till_ready()) {
+-		printk("%s wait timeout %d!\n", __func__, page_id);
++		printf("%s wait timeout %d!\n", __func__, page_id);
+ 		return -1;
+ 	}
+ 
+ 	ca_spinand_get_status_reg(&status);
+ 	if ((status & STATUS_OIP_MASK) == STATUS_READY) {
+ 		if ((status & STATUS_ECC_MASK) == STATUS_ECC_ERROR) {
+-			printk("ECC error! page:%d\n", page_id);
++			printf("ECC error! page:%d\n", page_id);
+ 			return -1;
+ 		}
+ 		if ((status & STATUS_ECC_MASK) == STATUS_ECC_1BIT_CORRECTED)
+-			printk("Bit corrected! page:%d\n", page_id);
++			printf("Bit corrected! page:%d\n", page_id);
+ 	}
+ 	return 0;
+ }
+@@ -661,7 +661,7 @@ static int ca_spinand_read_cache_x1(struct spi_nand_cmd *cmd)
+ 
+ 		/* Wait command ready */
+ 		if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-			printk("%s fail!\n", __func__);
++			printf("%s fail!\n", __func__);
+ 			return -1;
+ 		}
+ 
+@@ -678,7 +678,7 @@ static int ca_spinand_read_cache_x1(struct spi_nand_cmd *cmd)
+ 		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
+ 		/* Wait command ready */
+ 		if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-			printk("%s fail!\n", __func__);
++			printf("%s fail!\n", __func__);
+ 			return -1;
+ 		}
+ 
+@@ -701,7 +701,7 @@ static int ca_spinand_read_cache_x1(struct spi_nand_cmd *cmd)
+ 	case 0:
+ 		break;
+ 	default:
+-		printk("%s error length %d!\n", __func__, len);
++		printf("%s error length %d!\n", __func__, len);
+ 	}
+ 
+ 	/* Finish burst read  */
+@@ -755,7 +755,7 @@ static int ca_spinand_read_cache_x2(struct spi_nand_cmd *cmd)
+ 
+ 		/* Wait command ready */
+ 		if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-			printk("%s fail!\n", __func__);
++			printf("%s fail!\n", __func__);
+ 			return -1;
+ 		}
+ 
+@@ -772,7 +772,7 @@ static int ca_spinand_read_cache_x2(struct spi_nand_cmd *cmd)
+ 		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
+ 		/* Wait command ready */
+ 		if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-			printk("%s fail!\n", __func__);
++			printf("%s fail!\n", __func__);
+ 			return -1;
+ 		}
+ 
+@@ -795,7 +795,7 @@ static int ca_spinand_read_cache_x2(struct spi_nand_cmd *cmd)
+ 	case 0:
+ 		break;
+ 	default:
+-		printk("%s error length!\n", __func__);
++		printf("%s error length!\n", __func__);
+ 	}
+ 
+ 	/* Finish burst read  */
+@@ -849,7 +849,7 @@ static int ca_spinand_read_cache_x4(struct spi_nand_cmd *cmd)
+ 
+ 		/* Wait command ready */
+ 		if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-			printk("%s fail!\n", __func__);
++			printf("%s fail!\n", __func__);
+ 			return -1;
+ 		}
+ 		reg_data = read_flash_ctrl_reg(FLASH_SF_DATA);
+@@ -865,7 +865,7 @@ static int ca_spinand_read_cache_x4(struct spi_nand_cmd *cmd)
+ 		write_flash_ctrl_reg(FLASH_FLASH_ACCESS_START, SF_START_BIT_ENABLE);
+ 		/* Wait command ready */
+ 		if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-			printk("%s fail!\n", __func__);
++			printf("%s fail!\n", __func__);
+ 			return -1;
+ 		}
+ 
+@@ -888,7 +888,7 @@ static int ca_spinand_read_cache_x4(struct spi_nand_cmd *cmd)
+ 	case 0:
+ 		break;
+ 	default:
+-		printk("%s error length!\n", __func__);
++		printf("%s error length!\n", __func__);
+ 	}
+ 
+ 	/* Finish burst read  */
+@@ -947,7 +947,7 @@ static int ca_spinand_write_cache_x1(struct spi_nand_cmd *cmd)
+ 
+ 		/* Wait command ready */
+ 		if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-			printk("%s timeout\n", __func__);
++			printf("%s timeout\n", __func__);
+ 			return -1;
+ 		}
+ 
+@@ -1010,7 +1010,7 @@ static int ca_spinand_write_cache_x4(struct spi_nand_cmd *cmd)
+ 
+ 		/* Wait command ready */
+ 		if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-			printk("%s timeout\n", __func__);
++			printf("%s timeout\n", __func__);
+ 			return -1;
+ 		}
+ 
+@@ -1061,7 +1061,7 @@ static int ca_spinand_program_execute(struct spi_nand_cmd *cmd)
+ 
+ 	/* Wait command ready */
+ 	if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-		printk("%s fail!\n", __func__);
++		printf("%s fail!\n", __func__);
+ 		return -1;
+ 	}
+ 
+@@ -1086,7 +1086,7 @@ static int ca_spinand_erase_block(struct spi_nand_cmd *cmd)
+ 
+ 	/* Wait command ready */
+ 	if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0)
+-		printk("%s: command timeout!\n", __func__);
++		printf("%s: command timeout!\n", __func__);
+ 
+ 
+ 	/* Erase block
+@@ -1100,7 +1100,7 @@ static int ca_spinand_erase_block(struct spi_nand_cmd *cmd)
+ 
+ 	/* Wait command ready */
+ 	if (wait_flash_cmd_rdy(SFLASH_CMD_TIMEOUT) != 0) {
+-		printk("%s fail!\n", __func__);
++		printf("%s fail!\n", __func__);
+ 		return -1;
+ 	}
+ 
+@@ -1108,7 +1108,7 @@ static int ca_spinand_erase_block(struct spi_nand_cmd *cmd)
+ 	udelay(10);
+ 
+ 	if (wait_till_ready()) {
+-		printk("%s wait timeout %d!\n", __func__, block_id);
++		printf("%s wait timeout %d!\n", __func__, block_id);
+ 		return -1;
+ 	}
+ 
+@@ -1249,11 +1249,11 @@ struct spi_nand_chip *spi_nand_flash_probe(unsigned int bus, unsigned int cs,
+ 		return ret;
+ 	}
+ 
+-	spi_nand_debug("%s\n",chip->name);
+-	spi_nand_debug("spinand_oob_size:0x%x\n", chip->oob_size);
+-	spi_nand_debug("spinand_page_size:0x%x\n", chip->page_size);
+-	spi_nand_debug("spinand_blk_size:0x%x\n", chip->block_size);
+-	spi_nand_debug("spinand_size:0x%llx\n", chip->size);
++	printf("%s\n",chip->name);
++	printf("spinand_oob_size:0x%x\n", chip->oob_size);
++	printf("spinand_page_size:0x%x\n", chip->page_size);
++	printf("spinand_blk_size:0x%x\n", chip->block_size);
++	printf("spinand_size:0x%llx\n", chip->size);
+ 
+ 	return chip;
+ }
+diff --git a/include/configs/saturn-asic.h b/include/configs/saturn-asic.h
+index c888177..7f9eae7 100755
+--- a/include/configs/saturn-asic.h
++++ b/include/configs/saturn-asic.h
+@@ -19,7 +19,7 @@
+ #define CONFIG_SKIP_LOWLEVEL_INIT 1
+ 
+ #define CONFIG_CORTINA_NI_ENET 1
+-#define DEBUG
++//#define DEBUG
+ 
+ #ifdef CONFIG_CORTINA_NI_ENET
+ /* XRAM BASE ADDRESS */
+-- 
+1.8.3.1
+
