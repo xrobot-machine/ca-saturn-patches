@@ -1,0 +1,467 @@
+From cde4e57634107a6ab41877fe99c9dbd7fbfdf248 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Mon, 17 Aug 2020 17:21:34 +0800
+Subject: [PATCH 2/2] update qspi driver for kernel4.14
+
+---
+ drivers/spi/spi-cortina-qspi.c | 277 +++++++++++++++++++----------------------
+ 1 file changed, 128 insertions(+), 149 deletions(-)
+
+diff --git a/drivers/spi/spi-cortina-qspi.c b/drivers/spi/spi-cortina-qspi.c
+index d407285..b94dbd9 100644
+--- a/drivers/spi/spi-cortina-qspi.c
++++ b/drivers/spi/spi-cortina-qspi.c
+@@ -50,117 +50,108 @@
+ /*
+  * FLASH_TYPE
+  */
+-#define QSPI_SIZE_MASK		GENMASK(10, 9)
+-#define QSPI_SIZE(sz)		(((sz) << 9) & QSPI_SIZE_MASK)
+-#define QSPI_WIDTH			BIT(11)
+-#define QSPI_TYPE_MASK		GENMASK(14, 12)
+-#define QSPI_TYPE(tp)		(((tp) << 12) & QSPI_TYPE_MASK)
+-#define QSPI_PIN			BIT(15)
++#define QSPI_SIZE_MASK               GENMASK(10, 9)
++#define QSPI_SIZE(sz)                (((sz) << 9) & QSPI_SIZE_MASK)
++#define QSPI_WIDTH                   BIT(11)
++#define QSPI_TYPE_MASK               GENMASK(14, 12)
++#define QSPI_TYPE(tp)                (((tp) << 12) & QSPI_TYPE_MASK)
++#define QSPI_PIN                     BIT(15)
+ 
+ /*
+  * FLASH_FLASH_ACCESS_START
+  */
+-#define QSPI_START_EN		BIT(1)
+-#define QSPI_FIFO_START_EN	BIT(3)
+-#define QSPI_WR_ACCESS_EN	BIT(9)
++#define QSPI_START_EN                BIT(1)
++#define QSPI_FIFO_START_EN           BIT(3)
++#define QSPI_WR_ACCESS_EN            BIT(9)
+ 
+ /*
+  * FLASH_FLASH_INTERRUPT
+  */
+-#define QSPI_REG_IRQ		BIT(0)
+-#define QSPI_FIFO_IRQ		BIT(1)
++#define QSPI_REG_IRQ                 BIT(0)
++#define QSPI_FIFO_IRQ                BIT(1)
+ 
+ /*
+  * FLASH_SF_ACCESS
+  */
+-#define QSPI_OPCODE_MASK	GENMASK(7, 0)
+-#define QSPI_OPCODE(op)		(((op) << 0) & QSPI_OPCODE_MASK)
+-#define QSPI_ACCODE_MASK	GENMASK(11, 8)
+-#define QSPI_ACCODE(ac)		(((ac) << 8) & QSPI_ACCODE_MASK)
+-#define QSPI_FORCE_TERM		BIT(12)
+-#define QSPI_FORCE_BURST	BIT(13)
+-#define QSPI_AUTO_MODE_EN	BIT(15)
+-#define QSPI_CHIP_EN_ALT	BIT(16)
+-#define QSPI_HI_SPEED_RD	BIT(17)
+-#define QSPI_MIO_INF_DC		BIT(24)
+-#define QSPI_MIO_INF_AC		BIT(25)
+-#define QSPI_MIO_INF_CC		BIT(26)
+-#define QSPI_DDR_MASK		GENMASK(29, 28)
+-#define QSPI_DDR(ddr)		(((ddr) << 28) & QSPI_DDR_MASK)
+-#define QSPI_MIO_INF_MASK	GENMASK(31, 30)
+-#define QSPI_MIO_INF(io)	(((io) << 30) & QSPI_MIO_INF_MASK)
++#define QSPI_OPCODE_MASK             GENMASK(7, 0)
++#define QSPI_OPCODE(op)              (((op) << 0) & QSPI_OPCODE_MASK)
++#define QSPI_ACCODE_MASK             GENMASK(11, 8)
++#define QSPI_ACCODE(ac)              (((ac) << 8) & QSPI_ACCODE_MASK)
++#define QSPI_FORCE_TERM              BIT(12)
++#define QSPI_FORCE_BURST             BIT(13)
++#define QSPI_AUTO_MODE_EN            BIT(15)
++#define QSPI_CHIP_EN_ALT             BIT(16)
++#define QSPI_HI_SPEED_RD             BIT(17)
++#define QSPI_MIO_INF_DC              BIT(24)
++#define QSPI_MIO_INF_AC              BIT(25)
++#define QSPI_MIO_INF_CC              BIT(26)
++#define QSPI_DDR_MASK                GENMASK(29, 28)
++#define QSPI_DDR(ddr)                (((ddr) << 28) & QSPI_DDR_MASK)
++#define QSPI_MIO_INF_MASK            GENMASK(31, 30)
++#define QSPI_MIO_INF(io)             (((io) << 30) & QSPI_MIO_INF_MASK)
+ 
+ /*
+  * FLASH_SF_EXT_ACCESS
+  */
+-#define QSPI_EXT_OPCODE_MASK		GENMASK(7, 0)
+-#define QSPI_EXT_OPCODE(op)			(((op) << 0) & QSPI_EXT_OPCODE_MASK)
+-#define QSPI_EXT_DATA_CNT_MASK		GENMASK(20, 8)
+-#define QSPI_EXT_DATA_CNT(cnt)		(((cnt) << 8) & QSPI_EXT_DATA_CNT_MASK)
+-#define QSPI_EXT_DATA_CNT_MAX		4096
+-#define QSPI_EXT_ADDR_CNT_MASK		GENMASK(23, 21)
+-#define QSPI_EXT_ADDR_CNT(cnt)		(((cnt) << 21) & QSPI_EXT_ADDR_CNT_MASK)
+-#define QSPI_EXT_ADDR_CNT_MAX		5
+-#define QSPI_EXT_DUMY_CNT_MASK		GENMASK(29, 24)
+-#define QSPI_EXT_DUMY_CNT(cnt)		(((cnt) << 24) & QSPI_EXT_DUMY_CNT_MASK)
+-#define QSPI_EXT_DUMY_CNT_MAX		32
+-#define QSPI_EXT_DRD_CMD_EN			BIT(31)
++#define QSPI_EXT_OPCODE_MASK         GENMASK(7, 0)
++#define QSPI_EXT_OPCODE(op)          (((op) << 0) & QSPI_EXT_OPCODE_MASK)
++#define QSPI_EXT_DATA_CNT_MASK       GENMASK(20, 8)
++#define QSPI_EXT_DATA_CNT(cnt)       (((cnt) << 8) & QSPI_EXT_DATA_CNT_MASK)
++#define QSPI_EXT_DATA_CNT_MAX        (2048)
++#define QSPI_EXT_ADDR_CNT_MASK       GENMASK(23, 21)
++#define QSPI_EXT_ADDR_CNT(cnt)       (((cnt) << 21) & QSPI_EXT_ADDR_CNT_MASK)
++#define QSPI_EXT_ADDR_CNT_MAX        (7)
++#define QSPI_EXT_DUMY_CNT_MASK       GENMASK(29, 24)
++#define QSPI_EXT_DUMY_CNT(cnt)       (((cnt) << 24) & QSPI_EXT_DUMY_CNT_MASK)
++#define QSPI_EXT_DUMY_CNT_MAX        (63)
++#define QSPI_EXT_DRD_CMD_EN          BIT(31)
+ 
+ /*
+  * FLASH_SF_ADDRESS
+  */
+-#define QSPI_ADDR_MASK			GENMASK(31, 0)
+-#define QSPI_ADDR(addr)			(((addr) << 0) & QSPI_ADDR_MASK)
++#define QSPI_ADDR_MASK               GENMASK(31, 0)
++#define QSPI_ADDR(addr)              (((addr) << 0) & QSPI_ADDR_MASK)
+ 
+ /*
+  * FLASH_SF_DATA
+  */
+-#define QSPI_DATA_MASK			GENMASK(31, 0)
+-#define QSPI_DATA(addr)			(((addr) << 0) & QSPI_DATA__MASK)
++#define QSPI_DATA_MASK               GENMASK(31, 0)
++#define QSPI_DATA(addr)              (((addr) << 0) & QSPI_DATA_MASK)
+ 
+ /*
+  * FLASH_SF_TIMING
+  */
+-#define QSPI_TMR_IDLE_MASK		GENMASK(7, 0)
+-#define QSPI_TMR_IDLE(idle)		(((idle) << 0) & QSPI_TMR_IDLE_MASK)
+-#define QSPI_TMR_HOLD_MASK		GENMASK(15, 8)
+-#define QSPI_TMR_HOLD(hold)		(((hold) << 8) & QSPI_TMR_HOLD_MASK)
+-#define QSPI_TMR_SETUP_MASK		GENMASK(23, 16)
+-#define QSPI_TMR_SETUP(setup)	(((setup) << 16) & QSPI_TMR_SETUP_MASK)
+-#define QSPI_TMR_CLK_MASK		GENMASK(26, 24)
+-#define QSPI_TMR_CLK(clk)		(((clk) << 24) & QSPI_TMR_CLK_MASK)
+-
+-#define QSPI_AC_OPCODE						0x00
+-#define QSPI_AC_OPCODE_1_DATA				0x01
+-#define QSPI_AC_OPCODE_2_DATA				0x02
+-#define QSPI_AC_OPCODE_3_DATA				0x03
+-#define QSPI_AC_OPCODE_4_DATA				0x04
+-#define QSPI_AC_OPCODE_3_ADDR				0x05
+-#define QSPI_AC_OPCODE_4_ADDR				(QSPI_AC_OPCODE_3_ADDR)
+-#define QSPI_AC_OPCODE_3_ADDR_1_DATA		0x06
+-#define QSPI_AC_OPCODE_4_ADDR_1_DATA		(QSPI_AC_OPCODE_3_ADDR_1_DATA << 2)
+-#define QSPI_AC_OPCODE_3_ADDR_2_DATA		0x07
+-#define QSPI_AC_OPCODE_4_ADDR_2_DATA		(QSPI_AC_OPCODE_3_ADDR_2_DATA << 2)
+-#define QSPI_AC_OPCODE_3_ADDR_3_DATA		0x08
+-#define QSPI_AC_OPCODE_4_ADDR_3_DATA		(QSPI_AC_OPCODE_3_ADDR_3_DATA << 2)
+-#define QSPI_AC_OPCODE_3_ADDR_4_DATA		0x09
+-#define QSPI_AC_OPCODE_4_ADDR_4_DATA		(QSPI_AC_OPCODE_3_ADDR_4_DATA << 2)
+-#define QSPI_AC_OPCODE_3_ADDR_X_1_DATA		0x0A
+-#define QSPI_AC_OPCODE_4_ADDR_X_1_DATA		(QSPI_AC_OPCODE_3_ADDR_X_1_DATA << 2)
+-#define QSPI_AC_OPCODE_3_ADDR_X_2_DATA		0x0B
+-#define QSPI_AC_OPCODE_4_ADDR_X_2_DATA		(QSPI_AC_OPCODE_3_ADDR_X_2_DATA << 2)
+-#define QSPI_AC_OPCODE_3_ADDR_X_3_DATA		0x0C
+-#define QSPI_AC_OPCODE_4_ADDR_X_3_DATA		(QSPI_AC_OPCODE_3_ADDR_X_3_DATA << 2)
+-#define QSPI_AC_OPCODE_3_ADDR_X_4_DATA		0x0D
+-#define QSPI_AC_OPCODE_4_ADDR_X_4_DATA		(QSPI_AC_OPCODE_3_ADDR_X_4_DATA << 2)
+-#define QSPI_AC_OPCODE_3_ADDR_4X_1_DATA		0x0E
+-#define QSPI_AC_OPCODE_4_ADDR_4X_1_DATA		(QSPI_AC_OPCODE_3_ADDR_4X_1_DATA << 2)
+-#define QSPI_AC_OPCODE_EXTEND				0x0F
+-
+-#define QSPI_ACCESS_MIO_SINGLE		0
+-#define QSPI_ACCESS_MIO_DUAL		1
+-#define QSPI_ACCESS_MIO_QUAD		2
+-#define QSPI_BUSY_TIMEOUT_US		30000
++#define QSPI_TMR_IDLE_MASK           GENMASK(7, 0)
++#define QSPI_TMR_IDLE(idle)          (((idle) << 0) & QSPI_TMR_IDLE_MASK)
++#define QSPI_TMR_HOLD_MASK           GENMASK(15, 8)
++#define QSPI_TMR_HOLD(hold)          (((hold) << 8) & QSPI_TMR_HOLD_MASK)
++#define QSPI_TMR_SETUP_MASK          GENMASK(23, 16)
++#define QSPI_TMR_SETUP(setup)        (((setup) << 16) & QSPI_TMR_SETUP_MASK)
++#define QSPI_TMR_CLK_MASK            GENMASK(26, 24)
++#define QSPI_TMR_CLK(clk)            (((clk) << 24) & QSPI_TMR_CLK_MASK)
++
++#define QSPI_AC_OP                   0x00
++#define QSPI_AC_OP_1_DATA            0x01
++#define QSPI_AC_OP_2_DATA            0x02
++#define QSPI_AC_OP_3_DATA            0x03
++#define QSPI_AC_OP_4_DATA            0x04
++#define QSPI_AC_OP_3_ADDR            0x05
++#define QSPI_AC_OP_4_ADDR            (QSPI_AC_OP_3_ADDR)
++#define QSPI_AC_OP_3_ADDR_1_DATA     0x06
++#define QSPI_AC_OP_3_ADDR_2_DATA     0x07
++#define QSPI_AC_OP_3_ADDR_3_DATA     0x08
++#define QSPI_AC_OP_3_ADDR_4_DATA     0x09
++#define QSPI_AC_OP_3_ADDR_X_1_DATA   0x0A
++#define QSPI_AC_OP_3_ADDR_X_2_DATA   0x0B
++#define QSPI_AC_OP_3_ADDR_X_3_DATA   0x0C
++#define QSPI_AC_OP_3_ADDR_X_4_DATA   0x0D
++#define QSPI_AC_OP_3_ADDR_4X_1_DATA  0x0E
++#define QSPI_AC_OP_EXTEND            0x0F
++
++#define QSPI_ACCESS_MIO_SINGLE       0
++#define QSPI_ACCESS_MIO_DUAL         1
++#define QSPI_ACCESS_MIO_QUAD         2
++#define QSPI_BUSY_TIMEOUT_US         30000
+ 
+ struct ca_qspi {
+ 	struct device *dev;
+@@ -197,12 +188,10 @@ static int ca_qspi_wait_cmd(struct ca_qspi *qspi)
+ 			break;
+ 		udelay(1);
+ 	} while (timeout--);
+-
+ 	if (timeout == 0) {
+ 		printk("!error busy timeout (stat:%#x)\n", stat);
+ 		return -1;
+ 	}
+-
+ 	return 0;
+ }
+ 
+@@ -210,9 +199,8 @@ static int ca_qspi_rx(struct ca_qspi *qspi,
+ 	u8 *buf, unsigned int data_len)
+ {
+ 	u32 data = 0;
+-	int len = 0;
++	int len = data_len;
+ 
+-	len = data_len;
+ 	while (len >= 4) {
+ 		if (ca_qspi_wait_cmd(qspi))
+ 			return -1;
+@@ -222,14 +210,12 @@ static int ca_qspi_rx(struct ca_qspi *qspi,
+ 		*buf++ = (data >> 16) & 0xFF;
+ 		*buf++ = (data >> 24) & 0xFF;
+ 		len -= 4;
+-		//printk("%s: data=%#08x\n", __func__, data);
+ 	}
+ 
+ 	if (len > 0) {
+ 		if (ca_qspi_wait_cmd(qspi))
+ 			return -1;
+ 		data = ca_reg_read(qspi, QSPI_DATA_REG);
+-		//printk("%s: data=%#06x\n", __func__, data);
+ 		*buf++ = data & 0xFF;
+ 		switch (len) {
+ 		case 3:
+@@ -254,20 +240,36 @@ static int ca_qspi_tx(struct ca_qspi *qspi,
+ 	u8 *buf, unsigned int data_len)
+ {
+ 	u32 data = 0;
+-	int len = 0;
++	int len = data_len;
+ 
+-	len = data_len;
+-	while (len > 0) {
+-		data = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+-		//printk("%s: data=%#08x\n", __func__, data);
+-		/* Fill data */
++	while (len >= 4 ) {
++		data = *buf | (*(buf + 1) << 8)
++			| (*(buf + 2) << 16) | (*(buf + 3) << 24);
+ 		ca_reg_write(qspi, data, QSPI_DATA_REG);
+ 		if (ca_qspi_wait_cmd(qspi))
+ 			return -1;
+-
+ 		len -= 4;
+ 		buf += 4;
+ 	}
++	if (len > 0) {
++		data = *buf;
++		switch (len) {
++		case 3:
++			data |= (*(buf + 1) << 8) | ((*(buf + 2)) << 16);
++			break;
++		case 2:
++			data |= (*(buf + 1) << 8);
++			break;
++		case 1:
++			break;
++		default:
++			printk("%s: !err datalen=%d\n", __func__, len);
++			return -1;
++		}
++		ca_reg_write(qspi, data, QSPI_DATA_REG);
++		if (ca_qspi_wait_cmd(qspi))
++			return -1;
++	}
+ 	return 0;
+ }
+ 
+@@ -276,12 +278,13 @@ static int ca_qspi_xfer_data(struct ca_qspi *qspi,
+ {
+ 	u8 *buf = NULL;
+ 	u8 *data_buf = NULL;
+-	u8 addr_cnt = op->addr.nbytes;
+-	int total_cnt = 0;
+-	unsigned int len = 0;
+ 	u32 val = 0;
+-	unsigned int data_cnt = op->data.nbytes;
+-	u64 addr_offset = op->addr.val;
++	unsigned int len = 0;
++	u8 addr_cnt = op->addr.nbytes;
++	int data_cnt = op->data.nbytes;
++	u32 addr_offset = (u32)op->addr.val;
++	unsigned int buf_len = data_cnt > QSPI_EXT_DATA_CNT_MAX ?
++			QSPI_EXT_DATA_CNT_MAX : data_cnt;
+ 
+ 	val = ca_reg_read(qspi, QSPI_BUSY_REG);
+ 	if (op->data.dir == SPI_MEM_DATA_IN) {
+@@ -293,24 +296,14 @@ static int ca_qspi_xfer_data(struct ca_qspi *qspi,
+ 	}
+ 	ca_reg_write(qspi, val, QSPI_BUSY_REG);
+ 
+-	if (data_cnt > QSPI_EXT_DATA_CNT_MAX)
+-		buf = kmalloc(QSPI_EXT_DATA_CNT_MAX, GFP_KERNEL);
+-	else
+-		buf = kmalloc(data_cnt, GFP_KERNEL);
+-
+-	total_cnt = data_cnt;
+-	while (total_cnt > 0) {
+-		/* Fill address */
++	buf = kmalloc(buf_len, GFP_KERNEL);
++	while (data_cnt > 0) {
++		len = data_cnt > QSPI_EXT_DATA_CNT_MAX ?
++			QSPI_EXT_DATA_CNT_MAX : data_cnt;
++		if (len != data_cnt)
++			addr_offset += QSPI_EXT_DATA_CNT_MAX;
+ 		if (addr_cnt > 0)
+ 			ca_reg_write(qspi, (u32)addr_offset, QSPI_ADDR_REG);
+-
+-		if (total_cnt > QSPI_EXT_DATA_CNT_MAX) {
+-			len = QSPI_EXT_DATA_CNT_MAX;
+-			addr_offset += QSPI_EXT_DATA_CNT_MAX;
+-		} else {
+-			len = total_cnt;
+-		}
+-
+ 		memset(buf, 0, len);
+ 		if (op->data.dir == SPI_MEM_DATA_IN) {
+ 			if (ca_qspi_rx(qspi, buf, len))
+@@ -321,14 +314,12 @@ static int ca_qspi_xfer_data(struct ca_qspi *qspi,
+ 			if (ca_qspi_tx(qspi, buf, len))
+ 				break;
+ 		}
+-
+-		total_cnt -= len;
++		data_cnt -= len;
+ 		data_buf += len;
+ 	}
+ 	if (buf)
+ 		kfree(buf);
+-
+-	return total_cnt > 0 ? -1 : 0;
++	return data_cnt > 0 ? -1 : 0;
+ }
+ 
+ static int ca_qspi_buswidth_set(struct ca_qspi *qspi,
+@@ -337,9 +328,9 @@ static int ca_qspi_buswidth_set(struct ca_qspi *qspi,
+ 	u32 val = 0;
+ 	u8 buswidth = op->data.buswidth;
+ 
+-	//printk("%s: cmd:%#02x cmd.buswidth:%u addr.buswidth:%u data.buswidth:%#u\n",
+-	//	__func__, op->cmd.opcode, op->cmd.buswidth,
+-	//	op->addr.buswidth, op->data.buswidth);
++	debug("%s: cmd:%#02x cmd.buswidth:%u addr.buswidth:%u data.buswidth:%#u\n",
++		__func__, op->cmd.opcode, op->cmd.buswidth,
++		op->addr.buswidth, op->data.buswidth);
+ 	val = ca_reg_read(qspi, QSPI_ACCESS_REG);
+ 	val &= ~(QSPI_MIO_INF_MASK
+ 			| QSPI_MIO_INF_DC
+@@ -364,25 +355,23 @@ static int ca_qspi_buswidth_set(struct ca_qspi *qspi,
+ 	if (op->cmd.buswidth == 4 || op->cmd.buswidth == 2)
+ 		val |= QSPI_MIO_INF_CC;
+ 	ca_reg_write(qspi, val, QSPI_ACCESS_REG);
+-	//printk("%s: QSPI_ACCESS_REG=%#08x\n", __func__,
+-	//	ca_reg_read(qspi, QSPI_ACCESS_REG));
+-
+ 	return 0;
+ }
+ 
+ static int ca_qspi_issue_cmd(struct ca_qspi *qspi,
+ 	struct spi_mem_op *op, u8 opcode)
+ {
+-	u8 dummy_cnt = op->dummy.nbytes;
+ 	u8 addr_cnt = op->addr.nbytes;
+ 	u8 mio_cnt = 0;
+ 	u32 val = 0;
+ 	unsigned int data_cnt = op->data.nbytes;
+-	u64 addr_offset = op->addr.val;
++	u32 addr_offset = (u32)op->addr.val;
++	u8 dummy_cnt = op->dummy.buswidth != 0 ?  ((op->dummy.nbytes * 8)
++		/ op->dummy.buswidth) : (op->dummy.nbytes * 8);
+ 
+ 	val |= QSPI_ACCODE(opcode);
+ 	ca_reg_write(qspi, val, QSPI_ACCESS_REG);
+-	if (opcode == QSPI_AC_OPCODE_EXTEND) { /* read_data, write_data */
++	if (opcode == QSPI_AC_OP_EXTEND) { /* read_data, write_data */
+ 		if (data_cnt > 6) { /* except read_id */
+ 			if (ca_qspi_buswidth_set(qspi, op))
+ 				return -1;
+@@ -395,40 +384,30 @@ static int ca_qspi_issue_cmd(struct ca_qspi *qspi,
+ 			ca_reg_write(qspi, val, QSPI_ACCESS_REG);
+ 			data_cnt = 4;
+ 		}
+-		//printk("%s: FLASH ACCESS reg=%#08x\n",
+-		//	__func__, ca_reg_read(qspi, QSPI_ACCESS_REG));
+-
+ 		ca_reg_write(qspi, 0x0, QSPI_EXT_ACCESS);
+ 		val = ca_reg_read(qspi, QSPI_EXT_ACCESS);
+ 		val |= (QSPI_EXT_OPCODE(op->cmd.opcode)
+-			| QSPI_EXT_DUMY_CNT(dummy_cnt * 8 - 1)
++			| QSPI_EXT_DUMY_CNT(dummy_cnt - 1)
+ 			| QSPI_EXT_ADDR_CNT(addr_cnt - 1)
+ 			| QSPI_EXT_DATA_CNT(data_cnt - 1)
+ 			| QSPI_EXT_DRD_CMD_EN);
+ 		ca_reg_write(qspi, val, QSPI_EXT_ACCESS);
+-		//printk("%s: FLASH EXT ACCESS reg=%#08x\n",
+-		//	__func__, ca_reg_read(qspi, QSPI_EXT_ACCESS));
+-
+ 		if (ca_qspi_xfer_data(qspi, op))
+ 			return -1;
+-
+ 		/* Exit burst mode */
+ 		if (!qspi->fifo_mode && (data_cnt > 4)) {
+ 			val = ca_reg_read(qspi, QSPI_ACCESS_REG);
+ 			val &= ~QSPI_FORCE_BURST;
+ 			val |= QSPI_FORCE_TERM;
+ 			ca_reg_write(qspi, val, QSPI_ACCESS_REG);
+-			//printk("%s: FLASH ACCESS reg=%#08x\n",
+-			//	__func__, ca_reg_read(qspi, QSPI_ACCESS_REG));
+ 		}
++		ca_reg_write(qspi, 0x0, QSPI_ACCESS_REG);
+ 	} else { /* reset_op, wr_enable, wr_disable */
+ 		val = ca_reg_read(qspi, QSPI_ACCESS_REG);
+ 		val |= QSPI_OPCODE(op->cmd.opcode);
+ 		ca_reg_write(qspi, val, QSPI_ACCESS_REG);
+-		//printk("%s: FLASH ACCESS reg=%#08x\n",
+-		//	__func__, ca_reg_read(qspi, QSPI_ACCESS_REG));
+ 
+-		if (opcode == QSPI_AC_OPCODE_4_ADDR) { /* erase_op */
++		if (opcode == QSPI_AC_OP_4_ADDR) { /* erase_op */
+ 			/* Configure address length */
+ 			val = ca_reg_read(qspi, QSPI_TYPE_REG);
+ 			val &= ~QSPI_SIZE_MASK; /* 3 Bytes address */
+@@ -463,15 +442,15 @@ static int ca_qspi_exec_op(struct spi_mem *mem,
+ 	struct ca_qspi *qspi = spi_master_get_devdata(mem->spi->master);
+ 	u8 opcode;
+ 
+-	//printk("%s: cmd:%#02x addr.val:%#llx addr.len:%#x data.len:%#x data.dir:%#x\n",
+-	//     __func__, op->cmd.opcode, op->addr.val,
+-	//    op->addr.nbytes, op->data.nbytes, op->data.dir);
++	debug("%s: cmd:%#02x addr.val:%#llx addr.len:%#x data.len:%#x data.dir:%#x\n",
++	     __func__, op->cmd.opcode, op->addr.val,
++	    op->addr.nbytes, op->data.nbytes, op->data.dir);
+ 	if (op->data.nbytes == 0 && op->addr.nbytes == 0)
+-		opcode = QSPI_AC_OPCODE;
++		opcode = QSPI_AC_OP;
+ 	else if (op->data.nbytes == 0 && op->addr.nbytes > 0)
+-		opcode = QSPI_AC_OPCODE_4_ADDR;
++		opcode = QSPI_AC_OP_4_ADDR;
+ 	else if (op->data.nbytes > 0)
+-		opcode = QSPI_AC_OPCODE_EXTEND;
++		opcode = QSPI_AC_OP_EXTEND;
+ 	else {
+ 		printk("%s: can't support cmd.opcode:(%#02x) type currently!\n",
+ 			__func__, op->cmd.opcode);
+-- 
+1.8.3.1
+

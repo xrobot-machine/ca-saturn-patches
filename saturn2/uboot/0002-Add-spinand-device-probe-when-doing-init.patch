@@ -1,0 +1,376 @@
+From eeb2e412dd21f5e559dabfbdc33156da8d21f976 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Thu, 6 Aug 2020 16:49:12 +0800
+Subject: [PATCH 2/2] Add spinand device probe when doing init
+
+---
+ arch/mips/dts/ca-saturn-engboard.dts            |  4 +-
+ board/cortina/saturn2/saturn2.c                 | 48 +++++++++----
+ configs/cortina_saturn2-engboard-nand_defconfig |  2 +-
+ drivers/mtd/nand/spi/core.c                     | 96 +++++++++++++++++++------
+ drivers/spi/Kconfig                             |  2 +-
+ drivers/spi/Makefile                            |  2 +-
+ drivers/spi/ca_sflash.c                         | 23 +++---
+ 7 files changed, 125 insertions(+), 52 deletions(-)
+
+diff --git a/arch/mips/dts/ca-saturn-engboard.dts b/arch/mips/dts/ca-saturn-engboard.dts
+index 99d2312..9027b50 100644
+--- a/arch/mips/dts/ca-saturn-engboard.dts
++++ b/arch/mips/dts/ca-saturn-engboard.dts
+@@ -32,8 +32,8 @@
+ 
+ 		flash@0 {
+ 			compatible = "spi-nand", "jedec,spi-nor";
+-			spi-rx-bus-width = <4>;
+-			spi-tx-bus-width = <4>;
++			spi-rx-bus-width = <4>; /* 1:SINGLE, 2:DUAL or 4:QUAD */
++			spi-tx-bus-width = <4>; /* 1:SINGLE or 4:QUAD */
+ 			reg = <0>;
+ 		};
+ 	};
+diff --git a/board/cortina/saturn2/saturn2.c b/board/cortina/saturn2/saturn2.c
+index 7d0c8c4..2eb0a93 100644
+--- a/board/cortina/saturn2/saturn2.c
++++ b/board/cortina/saturn2/saturn2.c
+@@ -20,18 +20,35 @@ int dram_init(void)
+ 	return 0;
+ }
+ 
+-#if defined(CONFIG_CORTINA_SFLASH)
+-static int init_sflash(void)
++#if defined(CONFIG_CORTINA_QSPI)
++static int init_qspi(void)
+ {
+-        struct udevice *dev;
+-        int ret;
+-
+-        ret = uclass_first_device_err(UCLASS_SPI, &dev);
+-        if (ret && ret != -ENODEV) {
+-                printf("sflash device found err! %d\n", ret);
+-                return -1;
+-        }
+-        return 0;
++	struct udevice *dev;
++	int ret;
++
++	ret = uclass_first_device_err(UCLASS_SPI, &dev);
++	if (ret && ret != -ENODEV) {
++		printf("sflash-ctrl found err! %d\n", ret);
++		return -1;
++	}
++
++	return 0;
++}
++#endif
++
++#if defined(CONFIG_MTD_SPI_NAND)
++static int init_spinand(void)
++{
++	struct udevice *dev;
++	int ret;
++
++	ret = uclass_first_device_err(UCLASS_MTD, &dev);
++	if (ret && ret != -ENODEV) {
++		printf("spinand device found err! %d\n", ret);
++		return -1;
++	}
++
++	return 0;
+ }
+ #endif
+ 
+@@ -54,9 +71,14 @@ int board_eth_init(bd_t *bis)
+ int board_early_init_r(void)
+ {
+ 	dcache_disable();
+-#ifdef CONFIG_CORTINA_SFLASH
+-        init_sflash();
++#if defined(CONFIG_CORTINA_QSPI)
++	init_qspi();
+ #endif
++
++#if defined(CONFIG_MTD_SPI_NAND)
++	init_spinand();
++#endif
++
+ 	return 0;
+ }
+ 
+diff --git a/configs/cortina_saturn2-engboard-nand_defconfig b/configs/cortina_saturn2-engboard-nand_defconfig
+index af2817b..000ae20 100644
+--- a/configs/cortina_saturn2-engboard-nand_defconfig
++++ b/configs/cortina_saturn2-engboard-nand_defconfig
+@@ -36,7 +36,7 @@ CONFIG_SPI=y
+ CONFIG_SPI_MEM=y
+ CONFIG_DM_SPI_FLASH=y
+ CONFIG_SPI_FLASH=y
+-CONFIG_CORTINA_SFLASH=y
++CONFIG_CORTINA_QSPI=y
+ CONFIG_CMD_SPI=y
+ CONFIG_CMD_SF=y
+ CONFIG_CMD_SF_TEST=y
+diff --git a/drivers/mtd/nand/spi/core.c b/drivers/mtd/nand/spi/core.c
+index cd624ec..f980207 100644
+--- a/drivers/mtd/nand/spi/core.c
++++ b/drivers/mtd/nand/spi/core.c
+@@ -317,24 +317,30 @@ static int spinand_write_to_cache_op(struct spinand_device *spinand,
+ 	struct nand_device *nand = spinand_to_nand(spinand);
+ 	struct mtd_info *mtd = nanddev_to_mtd(nand);
+ 	struct nand_page_io_req adjreq = *req;
+-	unsigned int nbytes = 0;
+-	void *buf = NULL;
++	void *buf = spinand->databuf;
++	unsigned int nbytes;
+ 	u16 column = 0;
+ 	int ret;
+ 
+-	memset(spinand->databuf, 0xff,
+-	       nanddev_page_size(nand) +
+-	       nanddev_per_page_oobsize(nand));
++	/*
++	 * Looks like PROGRAM LOAD (AKA write cache) does not necessarily reset
++	 * the cache content to 0xFF (depends on vendor implementation), so we
++	 * must fill the page cache entirely even if we only want to program
++	 * the data portion of the page, otherwise we might corrupt the BBM or
++	 * user data previously programmed in OOB area.
++	 */
++	nbytes = nanddev_page_size(nand) + nanddev_per_page_oobsize(nand);
++	memset(spinand->databuf, 0xff, nbytes);
++	adjreq.dataoffs = 0;
++	adjreq.datalen = nanddev_page_size(nand);
++	adjreq.databuf.out = spinand->databuf;
++	adjreq.ooblen = nanddev_per_page_oobsize(nand);
++	adjreq.ooboffs = 0;
++	adjreq.oobbuf.out = spinand->oobbuf;
+ 
+-	if (req->datalen) {
++	if (req->datalen)
+ 		memcpy(spinand->databuf + req->dataoffs, req->databuf.out,
+ 		       req->datalen);
+-		adjreq.dataoffs = 0;
+-		adjreq.datalen = nanddev_page_size(nand);
+-		adjreq.databuf.out = spinand->databuf;
+-		nbytes = adjreq.datalen;
+-		buf = spinand->databuf;
+-	}
+ 
+ 	if (req->ooblen) {
+ 		if (req->mode == MTD_OPS_AUTO_OOB)
+@@ -345,14 +351,6 @@ static int spinand_write_to_cache_op(struct spinand_device *spinand,
+ 		else
+ 			memcpy(spinand->oobbuf + req->ooboffs, req->oobbuf.out,
+ 			       req->ooblen);
+-
+-		adjreq.ooblen = nanddev_per_page_oobsize(nand);
+-		adjreq.ooboffs = 0;
+-		nbytes += nanddev_per_page_oobsize(nand);
+-		if (!buf) {
+-			buf = spinand->oobbuf;
+-			column = nanddev_page_size(nand);
+-		}
+ 	}
+ 
+ 	spinand_cache_op_adjust_colum(spinand, &adjreq, &column);
+@@ -383,8 +381,8 @@ static int spinand_write_to_cache_op(struct spinand_device *spinand,
+ 
+ 		/*
+ 		 * We need to use the RANDOM LOAD CACHE operation if there's
+-		 * more than one iteration, because the LOAD operation resets
+-		 * the cache to 0xff.
++		 * more than one iteration, because the LOAD operation might
++		 * reset the cache to 0xff.
+ 		 */
+ 		if (nbytes) {
+ 			column = op.addr.val;
+@@ -958,6 +956,8 @@ int spinand_match_and_init(struct spinand_device *spinand,
+ 					       info->op_variants.update_cache);
+ 		spinand->op_templates.update_cache = op;
+ 
++		spinand->priv = (void *)info->model;
++
+ 		return 0;
+ 	}
+ 
+@@ -1026,6 +1026,56 @@ static const struct mtd_ooblayout_ops spinand_noecc_ooblayout = {
+ 	.rfree = spinand_noecc_ooblayout_free,
+ };
+ 
++void spinand_show_info(struct spinand_device *spinand)
++{
++	struct nand_device *nand = spinand_to_nand(spinand);
++	const char *model = (const char *)spinand->priv;
++	const struct spi_mem_op *read_ops = spinand->op_templates.read_cache;
++	const struct spi_mem_op *write_ops = spinand->op_templates.write_cache;
++
++	printf("SPI NAND: %s  (0x%02x%02x)\n",
++		model, spinand->id.data[1], spinand->id.data[2]);
++	printf("     OOB: 0x%x       (%d B)\n",
++		nanddev_per_page_oobsize(nand),
++		nanddev_per_page_oobsize(nand));
++	printf("    page: 0x%x      (%d KB)\n",
++		nanddev_page_size(nand),
++		nanddev_page_size(nand) >> 10);
++	printf("   block: 0x%x    (%d KB)\n",
++		nanddev_eraseblock_size(nand),
++		nanddev_eraseblock_size(nand) >> 10);
++	printf("    chip: 0x%x (%d MB)\n",
++		(u32)nanddev_size(nand),
++		(u32)(nanddev_size(nand) >> 20));
++	printf("    Mode: ");
++	switch(read_ops->cmd.opcode){
++	case 0xeb:
++		puts("Q/");
++		break;
++	case 0x6b:
++		puts("4/");
++		break;
++	case 0xbb:
++		puts("D/");
++		break;
++	case 0x3b:
++		puts("2/");
++		break;
++	case 0x03:
++	case 0x0b:
++		puts("S/");
++		break;
++	}
++	switch(write_ops->cmd.opcode){
++	case 0x32:
++		puts("4\n");
++		break;
++	case 0x02:
++		puts("S\n");
++		break;
++	}
++}
++
+ static int spinand_init(struct spinand_device *spinand)
+ {
+ 	struct mtd_info *mtd = spinand_to_mtd(spinand);
+@@ -1116,6 +1166,8 @@ static int spinand_init(struct spinand_device *spinand)
+ 
+ 	mtd->oobavail = ret;
+ 
++	spinand_show_info(spinand);
++
+ 	return 0;
+ 
+ err_cleanup_nanddev:
+diff --git a/drivers/spi/Kconfig b/drivers/spi/Kconfig
+index 8a244f1..a59b9d9 100644
+--- a/drivers/spi/Kconfig
++++ b/drivers/spi/Kconfig
+@@ -106,7 +106,7 @@ config BCMSTB_SPI
+ 	  be used to access the SPI flash on platforms embedding this
+ 	  Broadcom SPI core.
+ 
+-config CORTINA_SFLASH
++config CORTINA_QSPI
+ 	bool "Cortina-Access Serial Flash controller driver"
+ 	depends on DM_SPI && SPI_MEM
+ 	help
+diff --git a/drivers/spi/Makefile b/drivers/spi/Makefile
+index 32b98b4..a787f1f 100644
+--- a/drivers/spi/Makefile
++++ b/drivers/spi/Makefile
+@@ -25,7 +25,7 @@ obj-$(CONFIG_BCM63XX_SPI) += bcm63xx_spi.o
+ obj-$(CONFIG_BCMSTB_SPI) += bcmstb_spi.o
+ obj-$(CONFIG_CADENCE_QSPI) += cadence_qspi.o cadence_qspi_apb.o
+ obj-$(CONFIG_CF_SPI) += cf_spi.o
+-obj-$(CONFIG_CORTINA_SFLASH) += ca_sflash.o
++obj-$(CONFIG_CORTINA_QSPI) += ca_sflash.o
+ obj-$(CONFIG_DAVINCI_SPI) += davinci_spi.o
+ obj-$(CONFIG_DESIGNWARE_SPI) += designware_spi.o
+ obj-$(CONFIG_EXYNOS_SPI) += exynos_spi.o
+diff --git a/drivers/spi/ca_sflash.c b/drivers/spi/ca_sflash.c
+index 4932420..c489703 100644
+--- a/drivers/spi/ca_sflash.c
++++ b/drivers/spi/ca_sflash.c
+@@ -256,13 +256,13 @@ static int ca_qspi_rx(struct ca_qspi *priv,
+ 		*buf++ = (data >> 16) & 0xFF;
+ 		*buf++ = (data >> 24) & 0xFF;
+ 		len -= 4;
+-		debug("%s: data=%#08x\n", __func__, data);
++		debug("%s: data=0x%08x\n", __func__, data);
+ 	}
+ 	if (len > 0) {
+ 		if (ca_qspi_wait_cmd(priv))
+ 			return -1;
+ 		data = readl(&priv->regs->dr);
+-		debug("%s: data=%#08x\n", __func__, data);
++		debug("%s: data=0x%08x\n", __func__, data);
+ 		*buf++ = data & 0xFF;
+ 		switch (len) {
+ 		case 3:
+@@ -291,7 +291,7 @@ static int ca_qspi_tx(struct ca_qspi *priv,
+ 	len = data_len;
+ 	while (len > 0) {
+ 		data = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+-		debug("%s: data=%#08x\n", __func__, data);
++		debug("%s: data=0x%08x\n", __func__, data);
+ 		/* Fill data */
+ 		writel(data, &priv->regs->dr);
+ 		if (ca_qspi_wait_cmd(priv))
+@@ -362,7 +362,7 @@ static int ca_qspi_xfer_data(struct ca_qspi *priv,
+ static int ca_qspi_buswidth_set(struct ca_qspi *priv,
+ 	struct spi_mem_op *op)
+ {
+-	debug("%s: cmd:%#02x cmd.buswidth:%d addr.buswidth:%d data.buswidth:%d\n",
++	debug("%s: cmd:0x%02x cmd.buswidth:%d addr.buswidth:%d data.buswidth:%d\n",
+ 		__func__, op->cmd.opcode, op->cmd.buswidth,
+ 		op->addr.buswidth, op->data.buswidth);
+ 
+@@ -406,7 +406,7 @@ static int ca_qspi_issue_cmd(struct ca_qspi *priv,
+ 	clrsetbits_le32(&priv->regs->ar,
+ 			GENMASK(31, 0), QSPI_ACCODE(opcode));
+ 	if (opcode == QSPI_AC_OP_EXTEND) { /* read_data, wirte_data */
+-		debug("%s: FLASH ACCESS reg=%#08x\n", __func__,
++		debug("%s: FLASH ACCESS reg=0x%08x\n", __func__,
+ 			readl(&priv->regs->ar));
+ 		if (data_cnt > 6) { /* except read_id */
+ 			if (ca_qspi_buswidth_set(priv, op))
+@@ -425,7 +425,7 @@ static int ca_qspi_issue_cmd(struct ca_qspi *priv,
+ 				| QSPI_EXT_ADDR_CNT(addr_cnt - 1)
+ 				| QSPI_EXT_DATA_CNT(data_cnt - 1)
+ 				| QSPI_EXT_DRD_CMD_EN);
+-		debug("%s: FLASH EXT ACCESS reg=%#08x\n", __func__,
++		debug("%s: FLASH EXT ACCESS reg=0x%08x\n", __func__,
+ 			readl(&priv->regs->ear));
+ 
+ 		if (ca_qspi_xfer_data(priv, op))
+@@ -438,7 +438,7 @@ static int ca_qspi_issue_cmd(struct ca_qspi *priv,
+ 		}
+ 	} else { /* reset_op, wr_enable, wr_disable */
+ 		setbits_le32(&priv->regs->ar, QSPI_OPCODE(op->cmd.opcode));
+-		debug("%s: FLASH ACCESS reg=%#08x\n", __func__,
++		debug("%s: FLASH ACCESS reg=0x%08x\n", __func__,
+ 			readl(&priv->regs->ar));
+ 
+ 		if (opcode == QSPI_AC_OP_4_ADDR) { /* erase_op */
+@@ -468,10 +468,9 @@ static int ca_qspi_exec_op(struct spi_slave *slave,
+ 	struct ca_qspi *priv = dev_get_priv(slave->dev->parent);
+ 	u8 opcode = 0;
+ 
+-	debug("%s: cmd:%#02x(%d) addr.val:%#llx addr.len:%#x(%d) data.len:%#x data.dir:%#x(%d)\n",
+-		__func__, op->cmd.opcode, op->cmd.buswidth,
+-		op->addr.val, op->addr.nbytes, op->addr.buswidth,
+-		op->data.nbytes, op->data.dir, op->data.buswidth);
++	debug("%s: cmd:0x%02x(%d) addr.len:0x%04x(%d) data.len:0x%04x(%d)\n",
++		__func__, op->cmd.opcode, op->cmd.buswidth, op->addr.nbytes,
++		op->addr.buswidth, op->data.nbytes, op->data.buswidth);
+ 
+ 	if (op->data.nbytes == 0 && op->addr.nbytes == 0)
+ 		opcode = QSPI_AC_OP;
+@@ -480,7 +479,7 @@ static int ca_qspi_exec_op(struct spi_slave *slave,
+ 	else if (op->data.nbytes > 0)
+ 		opcode = QSPI_AC_OP_EXTEND;
+ 	else {
+-		printf("%s: can't support cmd.opcode:(%#02x) type currently!\n",
++		printf("%s: can't support cmd.opcode:(0x%02x) type currently!\n",
+ 			__func__, op->cmd.opcode);
+ 		return -1;
+ 	}
+-- 
+1.8.3.1
+

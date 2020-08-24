@@ -1,0 +1,101 @@
+From c94a03bc369eb6a10b0e8a87281348d767911993 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Fri, 21 Aug 2020 16:06:52 +0800
+Subject: [PATCH 2/3] Add spinand_show_info() for spi-nand devices
+
+Type:fix
+Scope:saturn2-sfu
+Bug:N/A
+---
+ drivers/mtd/nand/spi/core.c | 61 +++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 61 insertions(+)
+
+diff --git a/drivers/mtd/nand/spi/core.c b/drivers/mtd/nand/spi/core.c
+index cd624ec..6960245 100644
+--- a/drivers/mtd/nand/spi/core.c
++++ b/drivers/mtd/nand/spi/core.c
+@@ -958,6 +958,8 @@ int spinand_match_and_init(struct spinand_device *spinand,
+ 					       info->op_variants.update_cache);
+ 		spinand->op_templates.update_cache = op;
+ 
++		spinand->priv = (void *)info;
++
+ 		return 0;
+ 	}
+ 
+@@ -1026,6 +1028,63 @@ static const struct mtd_ooblayout_ops spinand_noecc_ooblayout = {
+ 	.rfree = spinand_noecc_ooblayout_free,
+ };
+ 
++void spinand_show_info(struct spinand_device *spinand)
++{
++	struct nand_device *nand = spinand_to_nand(spinand);
++	const struct spinand_info *info = (const struct spinand_info *)spinand->priv;
++	const struct spi_mem_op *read_ops = spinand->op_templates.read_cache;
++	const struct spi_mem_op *write_ops = spinand->op_templates.write_cache;
++
++	printf("SPI NAND: %s  (0x%02x%02x%02x)\n",
++	       info->model, spinand->id.data[1],
++		spinand->id.data[2], spinand->id.data[3]);
++	printf("   spare: 0x%x      (%dB)\n",
++	       nanddev_per_page_oobsize(nand),
++		nanddev_per_page_oobsize(nand));
++	printf("    page: 0x%x     (%dKB)\n",
++	       nanddev_page_size(nand),
++		nanddev_page_size(nand) >> 10);
++	printf("   block: 0x%x   (%dKB)\n",
++	       nanddev_eraseblock_size(nand),
++		nanddev_eraseblock_size(nand) >> 10);
++	printf("    chip: 0x%x(%dMB)\n",
++	       (u32)nanddev_size(nand),
++		(u32)(nanddev_size(nand) >> 20));
++	printf("    Mode: ");
++	switch (read_ops->cmd.opcode) {
++	case 0xeb:
++		puts("Q/");
++		break;
++	case 0x6b:
++		puts("4/");
++		break;
++	case 0xbb:
++		puts("D/");
++		break;
++	case 0x3b:
++		puts("2/");
++		break;
++	case 0x03:
++	case 0x0b:
++		puts("S/");
++		break;
++	default:
++		puts("ERR/");
++		break;
++	}
++	switch (write_ops->cmd.opcode) {
++	case 0x32:
++		puts("4\n");
++		break;
++	case 0x02:
++		puts("S\n");
++		break;
++	default:
++		puts("ERR\n");
++		break;
++	}
++}
++
+ static int spinand_init(struct spinand_device *spinand)
+ {
+ 	struct mtd_info *mtd = spinand_to_mtd(spinand);
+@@ -1116,6 +1175,8 @@ static int spinand_init(struct spinand_device *spinand)
+ 
+ 	mtd->oobavail = ret;
+ 
++	spinand_show_info(spinand);
++
+ 	return 0;
+ 
+ err_cleanup_nanddev:
+-- 
+1.8.3.1
+

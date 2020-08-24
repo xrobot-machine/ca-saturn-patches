@@ -1,0 +1,530 @@
+From 549f05beeeaaae60cde582295f6e7194d6e27aaa Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Thu, 13 Aug 2020 12:54:19 +0800
+Subject: [PATCH 3/3] Fixed bug on serial flash controller driver
+
+Updated serial flash controller source codes
+
+Type:fix
+Scope:saturn2-sfu
+Bug:N/A
+---
+ MAINTAINERS             |   2 +
+ drivers/spi/Kconfig     |   8 +
+ drivers/spi/Makefile    |   1 +
+ drivers/spi/ca_sflash.c | 452 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 463 insertions(+)
+ create mode 100644 drivers/spi/ca_sflash.c
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index cc56ade..483fa61 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -183,6 +183,7 @@ F:	drivers/serial/serial_cortina.c
+ F:	drivers/mmc/ca_dw_mmc.c
+ F:	drivers/i2c/i2c-cortina.c
+ F:	drivers/i2c/i2c-cortina.h
++F:	drivers/spi/ca_sflash.c
+ 
+ ARM/CZ.NIC TURRIS MOX SUPPORT
+ M:	Marek Behun <marek.behun@nic.cz>
+@@ -698,6 +699,7 @@ F:	drivers/serial/serial_cortina.c
+ F:	drivers/mmc/ca_dw_mmc.c
+ F:	drivers/i2c/i2c-cortina.c
+ F:	drivers/i2c/i2c-cortina.h
++F:	drivers/spi/ca_sflash.c
+ 
+ MIPS MSCC
+ M:	Gregory CLEMENT <gregory.clement@bootlin.com>
+diff --git a/drivers/spi/Kconfig b/drivers/spi/Kconfig
+index 4166c61..a59b9d9 100644
+--- a/drivers/spi/Kconfig
++++ b/drivers/spi/Kconfig
+@@ -106,6 +106,14 @@ config BCMSTB_SPI
+ 	  be used to access the SPI flash on platforms embedding this
+ 	  Broadcom SPI core.
+ 
++config CORTINA_QSPI
++	bool "Cortina-Access Serial Flash controller driver"
++	depends on DM_SPI && SPI_MEM
++	help
++	  Enable the Cortina-Access Serial Flash controller driver. This driver
++	  can be used to access the SPI NOR/NAND flash on platforms embedding this
++	  Cortina-Access IP core.
++
+ config CADENCE_QSPI
+ 	bool "Cadence QSPI driver"
+ 	help
+diff --git a/drivers/spi/Makefile b/drivers/spi/Makefile
+index 52462e1..a787f1f 100644
+--- a/drivers/spi/Makefile
++++ b/drivers/spi/Makefile
+@@ -25,6 +25,7 @@ obj-$(CONFIG_BCM63XX_SPI) += bcm63xx_spi.o
+ obj-$(CONFIG_BCMSTB_SPI) += bcmstb_spi.o
+ obj-$(CONFIG_CADENCE_QSPI) += cadence_qspi.o cadence_qspi_apb.o
+ obj-$(CONFIG_CF_SPI) += cf_spi.o
++obj-$(CONFIG_CORTINA_QSPI) += ca_sflash.o
+ obj-$(CONFIG_DAVINCI_SPI) += davinci_spi.o
+ obj-$(CONFIG_DESIGNWARE_SPI) += designware_spi.o
+ obj-$(CONFIG_EXYNOS_SPI) += exynos_spi.o
+diff --git a/drivers/spi/ca_sflash.c b/drivers/spi/ca_sflash.c
+new file mode 100644
+index 0000000..fdbdfc2
+--- /dev/null
++++ b/drivers/spi/ca_sflash.c
+@@ -0,0 +1,452 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Driver for Cortina QSPI Controller
++ *
++ * Copyright (C) 2020 Cortina Access Inc. All Rights Reserved.
++ *
++ * Author: PengPeng Chen <pengpeng.chen@cortina-access.com>
++ * Signed-off-by: Jason Li <jason.li@cortina-access.com>
++ *
++ */
++
++#include <common.h>
++#include <malloc.h>
++#include <clk.h>
++#include <dm.h>
++#include <errno.h>
++#include <fdtdec.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/ioport.h>
++#include <linux/sizes.h>
++#include <linux/err.h>
++#include <spi.h>
++#include <spi-mem.h>
++#include <reset.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++struct ca_qspi_regs {
++	u32 idr;        /* 0x00:Flash word ID Register */
++	u32 tc;         /* 0x04:Flash Timeout Counter Register */
++	u32 sr;         /* 0x08:Flash Status Register */
++	u32 tr;         /* 0x0C:Flash Type Register */
++	u32 asr;        /* 0x10:Flash ACCESS START/BUSY Register */
++	u32 isr;        /* 0x14:Flash Interrupt Status Register */
++	u32 imr;        /* 0x18:Flash Interrupt Mask Register */
++	u32 fcr;        /* 0x1C:NAND Flash FIFO Control Register */
++	u32 ffsr;       /* 0x20:Flash FIFO Status Register */
++	u32 ffar;       /* 0x24:Flash FIFO ADDRESS Register */
++	u32 ffmar;      /* 0x28:Flash FIFO MATCHING ADDRESS Register */
++	u32 ffdr;       /* 0x2C:Flash FIFO Data Register */
++	u32 ar;         /* 0x30:Serial Flash Access Register */
++	u32 ear;        /* 0x34:Serial Flash Extend Access Register */
++	u32 adr;        /* 0x38:Serial Flash ADdress Register */
++	u32 dr;         /* 0x3C:Serial Flash Data Register */
++	u32 tmr;        /* 0x40:Serial Flash Timing Register */
++};
++
++#define QSPI_SIZE_MASK               GENMASK(10, 9)
++#define QSPI_SIZE(sz)                (((sz) << 9) & QSPI_SIZE_MASK)
++#define QSPI_WIDTH                   BIT(11)
++#define QSPI_TYPE_MASK               GENMASK(14, 12)
++#define QSPI_TYPE(tp)                (((tp) << 12) & QSPI_TYPE_MASK)
++#define QSPI_PIN                     BIT(15)
++
++#define QSPI_START_EN                BIT(1)
++#define QSPI_FIFO_START_EN           BIT(3)
++#define QSPI_WR_ACCESS_EN            BIT(9)
++
++#define QSPI_REG_IRQ                 BIT(0)
++#define QSPI_FIFO_IRQ                BIT(1)
++
++#define QSPI_OPCODE_MASK             GENMASK(7, 0)
++#define QSPI_OPCODE(op)              (((op) << 0) & QSPI_OPCODE_MASK)
++#define QSPI_ACCODE_MASK             GENMASK(11, 8)
++#define QSPI_ACCODE(ac)              (((ac) << 8) & QSPI_ACCODE_MASK)
++#define QSPI_FORCE_TERM              BIT(12)
++#define QSPI_FORCE_BURST             BIT(13)
++#define QSPI_AUTO_MODE_EN            BIT(15)
++#define QSPI_CHIP_EN_ALT             BIT(16)
++#define QSPI_HI_SPEED_RD             BIT(17)
++#define QSPI_MIO_INF_DC              BIT(24)
++#define QSPI_MIO_INF_AC              BIT(25)
++#define QSPI_MIO_INF_CC              BIT(26)
++#define QSPI_DDR_MASK                GENMASK(29, 28)
++#define QSPI_DDR(ddr)                (((ddr) << 28) & QSPI_DDR_MASK)
++#define QSPI_MIO_INF_MASK            GENMASK(31, 30)
++#define QSPI_MIO_INF(io)             (((io) << 30) & QSPI_MIO_INF_MASK)
++
++#define QSPI_EXT_OPCODE_MASK         GENMASK(7, 0)
++#define QSPI_EXT_OPCODE(op)          (((op) << 0) & QSPI_EXT_OPCODE_MASK)
++#define QSPI_EXT_DATA_CNT_MASK       GENMASK(20, 8)
++#define QSPI_EXT_DATA_CNT(cnt)       (((cnt) << 8) & QSPI_EXT_DATA_CNT_MASK)
++#define QSPI_EXT_DATA_CNT_MAX        (2048)
++#define QSPI_EXT_ADDR_CNT_MASK       GENMASK(23, 21)
++#define QSPI_EXT_ADDR_CNT(cnt)       (((cnt) << 21) & QSPI_EXT_ADDR_CNT_MASK)
++#define QSPI_EXT_ADDR_CNT_MAX        (7)
++#define QSPI_EXT_DUMY_CNT_MASK       GENMASK(29, 24)
++#define QSPI_EXT_DUMY_CNT(cnt)       (((cnt) << 24) & QSPI_EXT_DUMY_CNT_MASK)
++#define QSPI_EXT_DUMY_CNT_MAX        (63)
++#define QSPI_EXT_DRD_CMD_EN          BIT(31)
++
++#define QSPI_ADDR_MASK               GENMASK(31, 0)
++#define QSPI_ADDR(addr)              (((addr) << 0) & QSPI_ADDR_MASK)
++
++#define QSPI_DATA_MASK               GENMASK(31, 0)
++#define QSPI_DATA(addr)              (((addr) << 0) & QSPI_DATA_MASK)
++
++#define QSPI_TMR_IDLE_MASK           GENMASK(7, 0)
++#define QSPI_TMR_IDLE(idle)          (((idle) << 0) & QSPI_TMR_IDLE_MASK)
++#define QSPI_TMR_HOLD_MASK           GENMASK(15, 8)
++#define QSPI_TMR_HOLD(hold)          (((hold) << 8) & QSPI_TMR_HOLD_MASK)
++#define QSPI_TMR_SETUP_MASK          GENMASK(23, 16)
++#define QSPI_TMR_SETUP(setup)        (((setup) << 16) & QSPI_TMR_SETUP_MASK)
++#define QSPI_TMR_CLK_MASK            GENMASK(26, 24)
++#define QSPI_TMR_CLK(clk)            (((clk) << 24) & QSPI_TMR_CLK_MASK)
++
++#define QSPI_AC_OP                   0x00
++#define QSPI_AC_OP_1_DATA            0x01
++#define QSPI_AC_OP_2_DATA            0x02
++#define QSPI_AC_OP_3_DATA            0x03
++#define QSPI_AC_OP_4_DATA            0x04
++#define QSPI_AC_OP_3_ADDR            0x05
++#define QSPI_AC_OP_4_ADDR            (QSPI_AC_OP_3_ADDR)
++#define QSPI_AC_OP_3_ADDR_1_DATA     0x06
++#define QSPI_AC_OP_3_ADDR_2_DATA     0x07
++#define QSPI_AC_OP_3_ADDR_3_DATA     0x08
++#define QSPI_AC_OP_3_ADDR_4_DATA     0x09
++#define QSPI_AC_OP_3_ADDR_X_1_DATA   0x0A
++#define QSPI_AC_OP_3_ADDR_X_2_DATA   0x0B
++#define QSPI_AC_OP_3_ADDR_X_3_DATA   0x0C
++#define QSPI_AC_OP_3_ADDR_X_4_DATA   0x0D
++#define QSPI_AC_OP_3_ADDR_4X_1_DATA  0x0E
++#define QSPI_AC_OP_EXTEND            0x0F
++
++#define QSPI_ACCESS_MIO_SINGLE       0
++#define QSPI_ACCESS_MIO_DUAL         1
++#define QSPI_ACCESS_MIO_QUAD         2
++#define QSPI_BUSY_TIMEOUT_US         30000
++
++struct ca_qspi {
++	struct ca_qspi_regs *regs;
++};
++
++static int ca_qspi_claim_bus(struct udevice *dev)
++{
++	debug("%s:\n", __func__);
++	return 0;
++}
++
++static int ca_qspi_release_bus(struct udevice *dev)
++{
++	debug("%s:\n", __func__);
++	return 0;
++}
++
++static int ca_qspi_set_speed(struct udevice *dev, uint speed)
++{
++	debug("%s:\n", __func__);
++	return 0;
++}
++
++static int ca_qspi_set_mode(struct udevice *dev, uint mode)
++{
++	debug("%s:\n", __func__);
++	return 0;
++}
++
++static int ca_qspi_wait_cmd(struct ca_qspi *priv)
++{
++	u32 asr = 0;
++
++	setbits_le32(&priv->regs->asr, QSPI_START_EN);
++	if (readl_poll_timeout(&priv->regs->asr, asr,
++				 !(asr & QSPI_START_EN),
++				 QSPI_BUSY_TIMEOUT_US)) {
++		pr_err("busy timeout (stat:%#x)\n", asr);
++		return -1;
++	}
++	return 0;
++}
++
++static int ca_qspi_rx(struct ca_qspi *priv,
++		      u8 *buf, unsigned int data_len)
++{
++	u32 data = 0;
++	int len = data_len;
++
++	while (len >= 4) {
++		if (ca_qspi_wait_cmd(priv))
++			return -1;
++		data = readl(&priv->regs->dr);
++		*buf++ = data & 0xFF;
++		*buf++ = (data >> 8) & 0xFF;
++		*buf++ = (data >> 16) & 0xFF;
++		*buf++ = (data >> 24) & 0xFF;
++		len -= 4;
++	}
++	if (len > 0) {
++		if (ca_qspi_wait_cmd(priv))
++			return -1;
++		data = readl(&priv->regs->dr);
++		*buf++ = data & 0xFF;
++		switch (len) {
++		case 3:
++			*buf++ = (data >> 8) & 0xFF;
++			*buf++ = (data >> 16) & 0xFF;
++			break;
++		case 2:
++			*buf++ = (data >> 8) & 0xFF;
++			break;
++		case 1:
++			break;
++		default:
++			printf("%s: err datalen=%d!\n", __func__, len);
++			return -1;
++		}
++	}
++	return 0;
++}
++
++static int ca_qspi_tx(struct ca_qspi *priv,
++		      u8 *buf, unsigned int data_len)
++{
++	u32 data = 0;
++	int len = data_len;
++
++	while (len >= 4) {
++		data = *buf | (*(buf + 1) << 8)
++			| (*(buf + 2) << 16) | (*(buf + 3) << 24);
++		writel(data, &priv->regs->dr);
++		if (ca_qspi_wait_cmd(priv))
++			return -1;
++		len -= 4;
++		buf += 4;
++	}
++	if (len > 0) {
++		data = *buf;
++		switch (len) {
++		case 3:
++			data |= (*(buf + 1) << 8) | ((*(buf + 2)) << 16);
++			break;
++		case 2:
++			data |= (*(buf + 1) << 8);
++			break;
++		case 1:
++			break;
++		default:
++			printf("%s: !err datalen=%d\n", __func__, len);
++			return -1;
++		}
++		writel(data, &priv->regs->dr);
++		if (ca_qspi_wait_cmd(priv))
++			return -1;
++	}
++	return 0;
++}
++
++static int ca_qspi_xfer_data(struct ca_qspi *priv,
++			     struct spi_mem_op *op)
++{
++	u8 *buf = NULL;
++	u8 *data_buf = NULL;
++	unsigned int len = 0;
++	u8 addr_cnt = op->addr.nbytes;
++	int data_cnt = op->data.nbytes;
++	u32 addr_offset = (u32)op->addr.val;
++	unsigned int buf_len  = data_cnt > QSPI_EXT_DATA_CNT_MAX ?
++		QSPI_EXT_DATA_CNT_MAX : data_cnt;
++
++	if (op->data.dir == SPI_MEM_DATA_IN) {
++		clrbits_le32(&priv->regs->asr, QSPI_WR_ACCESS_EN);
++		data_buf = (u8 *)op->data.buf.in;
++	} else {
++		setbits_le32(&priv->regs->asr, QSPI_WR_ACCESS_EN);
++		data_buf = (u8 *)op->data.buf.out;
++	}
++	buf = malloc(buf_len);
++	while (data_cnt > 0) {
++		len = data_cnt > QSPI_EXT_DATA_CNT_MAX ?
++			QSPI_EXT_DATA_CNT_MAX : data_cnt;
++		if (addr_cnt > 0)
++			writel(addr_offset, &priv->regs->adr);
++		memset(buf, 0, len);
++		if (op->data.dir == SPI_MEM_DATA_IN) {
++			if (ca_qspi_rx(priv, buf, len))
++				break;
++			memcpy(data_buf, buf, len);
++		} else {
++			memcpy(buf, data_buf, len);
++			if (ca_qspi_tx(priv, buf, len))
++				break;
++		}
++		data_cnt -= len;
++		data_buf += len;
++		addr_offset += data_cnt > 0 ? len : 0;
++	}
++	if (buf)
++		free(buf);
++	return data_cnt > 0 ? -1 : 0;
++}
++
++static int ca_qspi_buswidth_set(struct ca_qspi *priv,
++				struct spi_mem_op *op)
++{
++	clrbits_le32(&priv->regs->ar,
++		     QSPI_MIO_INF_MASK | QSPI_MIO_INF_DC
++		| QSPI_MIO_INF_AC | QSPI_MIO_INF_CC);
++	switch (op->data.buswidth) {
++	case 4:
++		setbits_le32(&priv->regs->ar,
++			     QSPI_MIO_INF_DC
++			| QSPI_MIO_INF(QSPI_ACCESS_MIO_QUAD));
++		break;
++	case 2:
++		setbits_le32(&priv->regs->ar,
++			     QSPI_MIO_INF_DC
++			| QSPI_MIO_INF(QSPI_ACCESS_MIO_DUAL));
++		break;
++	case 1:
++		setbits_le32(&priv->regs->ar,
++			     QSPI_MIO_INF(QSPI_ACCESS_MIO_SINGLE));
++		break;
++	default:
++		printf("%s: err! buswidth=%d!\n", __func__, op->data.buswidth);
++		return -1;
++	}
++	if (op->addr.buswidth == 4 || op->addr.buswidth == 2)
++		setbits_le32(&priv->regs->ar, QSPI_MIO_INF_AC);
++	if (op->cmd.buswidth == 4 || op->cmd.buswidth == 2)
++		setbits_le32(&priv->regs->ar, QSPI_MIO_INF_CC);
++	return 0;
++}
++
++static int ca_qspi_issue_cmd(struct ca_qspi *priv,
++			     struct spi_mem_op *op, u8 opcode)
++{
++	u8 addr_cnt = op->addr.nbytes;
++	unsigned int data_cnt = op->data.nbytes;
++	u32 addr_offset = (u32)op->addr.val;
++	u8 dummy_cnt = op->dummy.buswidth != 0 ? ((op->dummy.nbytes * 8)
++		/ op->dummy.buswidth) : (op->dummy.nbytes * 8);
++
++	/* Set the access register */
++	clrsetbits_le32(&priv->regs->ar,
++			GENMASK(31, 0), QSPI_ACCODE(opcode));
++	if (opcode == QSPI_AC_OP_EXTEND) {
++		if (data_cnt > 6) {
++			if (ca_qspi_buswidth_set(priv, op))
++				return -1;
++		}
++		if (data_cnt > 4) {
++			setbits_le32(&priv->regs->ar, QSPI_FORCE_BURST);
++			clrbits_le32(&priv->regs->ar, QSPI_FORCE_TERM);
++			data_cnt = 4;
++		}
++		/* Use command in extend_access register */
++		clrsetbits_le32(&priv->regs->ear, GENMASK(31, 0),
++				QSPI_EXT_OPCODE(op->cmd.opcode)
++				| QSPI_EXT_DUMY_CNT(dummy_cnt - 1)
++				| QSPI_EXT_ADDR_CNT(addr_cnt - 1)
++				| QSPI_EXT_DATA_CNT(data_cnt - 1)
++				| QSPI_EXT_DRD_CMD_EN);
++		if (ca_qspi_xfer_data(priv, op))
++			return -1;
++		if (data_cnt > 4) {
++			setbits_le32(&priv->regs->ar, QSPI_FORCE_TERM);
++			clrbits_le32(&priv->regs->ar, QSPI_FORCE_BURST);
++		}
++		clrsetbits_le32(&priv->regs->ar,
++				GENMASK(31, 0), QSPI_ACCODE(0));
++	} else {
++		setbits_le32(&priv->regs->ar, QSPI_OPCODE(op->cmd.opcode));
++		if (opcode == QSPI_AC_OP_4_ADDR) {
++			clrbits_le32(&priv->regs->tr, QSPI_SIZE_MASK);
++			if (addr_cnt > 3)/* 4 Bytes address */
++				setbits_le32(&priv->regs->tr, QSPI_SIZE(2));
++			if (addr_cnt > 0)
++				writel(addr_offset, &priv->regs->adr);
++			if (ca_qspi_wait_cmd(priv))
++				return -1;
++			udelay(10);
++			return 0;
++		}
++	}
++	if (ca_qspi_wait_cmd(priv))
++		return -1;
++	return 0;
++}
++
++static int ca_qspi_exec_op(struct spi_slave *slave,
++			   const struct spi_mem_op *op)
++{
++	struct ca_qspi *priv = dev_get_priv(slave->dev->parent);
++	u8 opcode = 0;
++
++	if (op->data.nbytes == 0 && op->addr.nbytes == 0) {
++		opcode = QSPI_AC_OP;
++	} else if (op->data.nbytes == 0 && op->addr.nbytes > 0) {
++		opcode = QSPI_AC_OP_4_ADDR;
++	} else if (op->data.nbytes > 0) {
++		opcode = QSPI_AC_OP_EXTEND;
++	} else {
++		printf("%s: invalid opcode:(0x%02x)\n", __func__, op->cmd.opcode);
++		return -1;
++	}
++	return ca_qspi_issue_cmd(priv, (struct spi_mem_op *)op, opcode);
++}
++
++static void ca_qspi_init(struct ca_qspi *priv)
++{
++	clrsetbits_le32(&priv->regs->tr,
++		GENMASK(31, 0), QSPI_SIZE(2));
++	clrsetbits_le32(&priv->regs->tmr, GENMASK(31, 0),
++			QSPI_TMR_CLK(0x07) | QSPI_TMR_SETUP(0x01)
++		| QSPI_TMR_HOLD(0x01) | QSPI_TMR_IDLE(0x01));
++}
++
++static int ca_qspi_probe(struct udevice *dev)
++{
++	struct ca_qspi *priv = dev_get_priv(dev);
++	struct resource res;
++	int ret = 0;
++
++	ret = dev_read_resource_byname(dev, "sflash-regs", &res);
++	if (ret) {
++		dev_err(dev, "can't get regs base addresses(ret = %d)!\n", ret);
++		return ret;
++	}
++	priv->regs = devm_ioremap(dev, res.start, resource_size(&res));
++	if (IS_ERR(priv->regs))
++		return PTR_ERR(priv->regs);
++	ca_qspi_init(priv);
++	printf("QSPI:  Serial Flash ctrl has probed\n");
++	return 0;
++}
++
++static const struct spi_controller_mem_ops ca_qspi_mem_ops = {
++	.exec_op = ca_qspi_exec_op,
++};
++
++static const struct dm_spi_ops ca_qspi_ops = {
++	.mem_ops = &ca_qspi_mem_ops,
++	.claim_bus = ca_qspi_claim_bus,
++	.release_bus = ca_qspi_release_bus,
++	.set_speed = ca_qspi_set_speed,
++	.set_mode = ca_qspi_set_mode,
++};
++
++static const struct udevice_id ca_qspi_ids[] = {
++	{.compatible = "cortina,ca-sflash"},
++	{}
++};
++
++U_BOOT_DRIVER(ca_sflash) = {
++	.name = "ca_sflash",
++	.id = UCLASS_SPI,
++	.of_match = ca_qspi_ids,
++	.ops = &ca_qspi_ops,
++	.priv_auto_alloc_size = sizeof(struct ca_qspi),
++	.probe = ca_qspi_probe,
++};
+-- 
+1.8.3.1
+

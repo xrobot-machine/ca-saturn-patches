@@ -1,0 +1,176 @@
+From 5df5c99e9ebe3c2d0aadbb8cff53f928ecb2fe12 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Fri, 21 Aug 2020 16:15:02 +0800
+Subject: [PATCH 3/3] Add spinor_show_info() for spi-nor devices
+
+Enable QUAD IO read/write for w25q512IM/Q and mx25l51245g device
+
+Type:fix
+Scope:saturn2-sfu
+Bug:N/A
+Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+---
+ drivers/mtd/spi/sf_internal.h  |  3 ++
+ drivers/mtd/spi/spi-nor-core.c | 71 +++++++++++++++++++++++++++++++++++++++++-
+ drivers/mtd/spi/spi-nor-ids.c  | 10 ++++--
+ 3 files changed, 80 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/mtd/spi/sf_internal.h b/drivers/mtd/spi/sf_internal.h
+index 940b2e4..45e35b4 100644
+--- a/drivers/mtd/spi/sf_internal.h
++++ b/drivers/mtd/spi/sf_internal.h
+@@ -67,6 +67,9 @@ struct flash_info {
+ #define USE_CLSR		BIT(14)	/* use CLSR command */
+ #define SPI_NOR_HAS_SST26LOCK	BIT(15)	/* Flash supports lock/unlock via BPR */
+ #define SPI_NOR_OCTAL_READ      BIT(16) /* Flash supports Octal Read */
++#define SPI_NOR_QUAD_WRITE	    BIT(17)	/* Flash supports Quad_X4 Write */
++#define SPI_NOR_QUAD_WRITE_1_4_4	BIT(18)	/* Flash supports Quad_IO Write */
++#define SPI_NOR_QUAD_READ_1_4_4     BIT(19)	/* Flash supports Quad_IO Read */
+ };
+ 
+ extern const struct flash_info spi_nor_ids[];
+diff --git a/drivers/mtd/spi/spi-nor-core.c b/drivers/mtd/spi/spi-nor-core.c
+index 7b6ad49..c333cd5 100644
+--- a/drivers/mtd/spi/spi-nor-core.c
++++ b/drivers/mtd/spi/spi-nor-core.c
+@@ -2175,6 +2175,13 @@ static int spi_nor_init_params(struct spi_nor *nor,
+ 					  SNOR_PROTO_1_1_4);
+ 	}
+ 
++	if (info->flags & SPI_NOR_QUAD_READ_1_4_4) {
++		params->hwcaps.mask |= SNOR_HWCAPS_READ_1_4_4;
++		spi_nor_set_read_settings(&params->reads[SNOR_CMD_READ_1_4_4],
++					  0, 8, SPINOR_OP_READ_1_4_4,
++					  SNOR_PROTO_1_4_4);
++	}
++
+ 	if (info->flags & SPI_NOR_OCTAL_READ) {
+ 		params->hwcaps.mask |= SNOR_HWCAPS_READ_1_1_8;
+ 		spi_nor_set_read_settings(&params->reads[SNOR_CMD_READ_1_1_8],
+@@ -2187,12 +2194,19 @@ static int spi_nor_init_params(struct spi_nor *nor,
+ 	spi_nor_set_pp_settings(&params->page_programs[SNOR_CMD_PP],
+ 				SPINOR_OP_PP, SNOR_PROTO_1_1_1);
+ 
+-	if (info->flags & SPI_NOR_QUAD_READ) {
++	if (info->flags & SPI_NOR_QUAD_WRITE) {
+ 		params->hwcaps.mask |= SNOR_HWCAPS_PP_1_1_4;
+ 		spi_nor_set_pp_settings(&params->page_programs[SNOR_CMD_PP_1_1_4],
+ 					SPINOR_OP_PP_1_1_4, SNOR_PROTO_1_1_4);
+ 	}
+ 
++	if (info->flags & SPI_NOR_QUAD_WRITE_1_4_4) {
++		params->hwcaps.mask |= SNOR_HWCAPS_PP_1_4_4;
++		spi_nor_set_pp_settings(&params->page_programs[SNOR_CMD_PP_1_4_4],
++					SPINOR_OP_PP_1_4_4, SNOR_PROTO_1_4_4);
++	}
++
++
+ 	/* Select the procedure to set the Quad Enable bit. */
+ 	if (params->hwcaps.mask & (SNOR_HWCAPS_READ_QUAD |
+ 				   SNOR_HWCAPS_PP_QUAD)) {
+@@ -2467,6 +2481,58 @@ static int spi_nor_init(struct spi_nor *nor)
+ 	return 0;
+ }
+ 
++void spi_nor_show_info(struct spi_nor *nor)
++{
++	const struct flash_info *info = nor->info;
++
++	printf("SPI NOR: %s (0x%02x%02x%02x)\n",
++		nor->name, info->id[0],
++		info->id[1], info->id[2]);
++	printf("   page: 0x%x       (%d B)\n",
++		nor->page_size, nor->page_size);
++	printf(" sector: 0x%x      (%d KB)\n",
++		nor->sector_size, nor->sector_size >> 10);
++	printf("  erase: 0x%x      (%d KB)\n",
++		nor->erase_size, nor->erase_size >> 10);
++	printf("   chip: 0x%x   (%d MB)\n",
++		nor->size, nor->size >> 20);
++	printf("   Mode: ");
++	switch(nor->read_proto) {
++	case SNOR_PROTO_1_4_4:
++		puts("Q/");
++		break;
++	case SNOR_PROTO_1_1_4:
++		puts("4/");
++		break;
++	case SNOR_PROTO_1_2_2:
++		puts("D/");
++		break;
++	case SNOR_PROTO_1_1_2:
++		puts("2/");
++		break;
++	case SNOR_PROTO_1_1_1:
++		puts("S/");
++		break;
++	default:
++		puts("ERR/");
++		break;
++	}
++	switch(nor->write_proto) {
++	case SNOR_PROTO_1_4_4:
++		puts("Q\n");
++		break;
++	case SNOR_PROTO_1_1_4:
++		puts("4\n");
++		break;
++	case SNOR_PROTO_1_1_1:
++		puts("S\n");
++		break;
++	default:
++		puts("ERR\n");
++		break;
++	}
++}
++
+ int spi_nor_scan(struct spi_nor *nor)
+ {
+ 	struct spi_nor_flash_parameter params;
+@@ -2628,12 +2694,15 @@ int spi_nor_scan(struct spi_nor *nor)
+ 	nor->sector_size = mtd->erasesize;
+ 
+ #ifndef CONFIG_SPL_BUILD
++#if 0
+ 	printf("SF: Detected %s with page size ", nor->name);
+ 	print_size(nor->page_size, ", erase size ");
+ 	print_size(nor->erase_size, ", total ");
+ 	print_size(nor->size, "");
+ 	puts("\n");
+ #endif
++	spi_nor_show_info(nor);
++#endif
+ 
+ 	return 0;
+ }
+diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
+index ce7f26f..8226ef5 100644
+--- a/drivers/mtd/spi/spi-nor-ids.c
++++ b/drivers/mtd/spi/spi-nor-ids.c
+@@ -154,7 +154,9 @@ const struct flash_info spi_nor_ids[] = {
+ 	{ INFO("mx25l25635e", 0xc22019, 0, 64 * 1024, 512, SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ INFO("mx25u25635f", 0xc22539, 0, 64 * 1024, 512, SECT_4K | SPI_NOR_4B_OPCODES) },
+ 	{ INFO("mx25l25655e", 0xc22619, 0, 64 * 1024, 512, 0) },
+-	{ INFO("mx66l51235l", 0xc2201a, 0, 64 * 1024, 1024, SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
++	{ INFO("mx25l51245g", 0xc2201a, 0, 64 * 1024, 1024,
++		SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ_1_4_4 | SPI_NOR_QUAD_WRITE_1_4_4 | SPI_NOR_4B_OPCODES) },
++/*	{ INFO("mx66l51235l", 0xc2201a, 0, 64 * 1024, 1024, SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) }, */
+ 	{ INFO("mx66u51235f", 0xc2253a, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
+ 	{ INFO("mx66u2g45g",  0xc2253c, 0, 64 * 1024, 4096, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
+ 	{ INFO("mx66l1g45g",  0xc2201b, 0, 64 * 1024, 2048, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+@@ -311,8 +313,10 @@ const struct flash_info spi_nor_ids[] = {
+ 	{ INFO("w25q64cv", 0xef4017, 0, 64 * 1024,  128, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ INFO("w25q128", 0xef4018, 0, 64 * 1024, 256, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ INFO("w25q256", 0xef4019, 0, 64 * 1024, 512, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+-	{ INFO("w25q512IQ", 0xef4020, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_QUAD_READ ) },
+-	{ INFO("w25q512IM", 0xef7020, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_QUAD_READ ) },
++	{ INFO("w25q512IQ", 0xef4020, 0, 64 * 1024, 1024,
++		SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ_1_4_4 | SPI_NOR_QUAD_WRITE | SPI_NOR_4B_OPCODES) },
++	{ INFO("w25q512IM", 0xef7020, 0, 64 * 1024, 1024,
++		SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ_1_4_4 | SPI_NOR_QUAD_WRITE | SPI_NOR_4B_OPCODES) },
+ #endif
+ #ifdef CONFIG_SPI_FLASH_XMC
+ 	/* XMC (Wuhan Xinxin Semiconductor Manufacturing Corp.) */
+-- 
+1.8.3.1
+

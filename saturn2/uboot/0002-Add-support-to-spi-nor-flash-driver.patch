@@ -1,0 +1,331 @@
+From 706d341283781814144a59e89e146d912931fa62 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Fri, 7 Aug 2020 17:01:12 +0800
+Subject: [PATCH 2/2] Add support to spi-nor flash driver
+
+---
+ configs/cortina_saturn2-engboard-nand_defconfig |  1 +
+ configs/cortina_saturn2-engboard-nor_defconfig  |  3 +-
+ drivers/mtd/nand/spi/core.c                     | 44 ++++++++++++-----------
+ drivers/mtd/spi/sf_internal.h                   |  2 ++
+ drivers/mtd/spi/spi-nor-core.c                  | 12 +++++--
+ drivers/mtd/spi/spi-nor-ids.c                   |  6 ++--
+ drivers/spi/ca_sflash.c                         | 47 +++++++++++++++++--------
+ 7 files changed, 74 insertions(+), 41 deletions(-)
+
+diff --git a/configs/cortina_saturn2-engboard-nand_defconfig b/configs/cortina_saturn2-engboard-nand_defconfig
+index 000ae20..bbbc5b7 100644
+--- a/configs/cortina_saturn2-engboard-nand_defconfig
++++ b/configs/cortina_saturn2-engboard-nand_defconfig
+@@ -1,4 +1,5 @@
+ CONFIG_MIPS=y
++CONFIG_SYSRESET=y
+ CONFIG_SYS_ARCH="mips"
+ CONFIG_TARGET_SATURN2=y
+ CONFIG_SYS_TEXT_BASE=0x84000000
+diff --git a/configs/cortina_saturn2-engboard-nor_defconfig b/configs/cortina_saturn2-engboard-nor_defconfig
+index d94f8fd..f364be9 100644
+--- a/configs/cortina_saturn2-engboard-nor_defconfig
++++ b/configs/cortina_saturn2-engboard-nor_defconfig
+@@ -33,7 +33,7 @@ CONFIG_MIPS_CACHE_INDEX_BASE=0
+ # SPI-NOR Flash Support
+ CONFIG_DM_SPI=y
+ CONFIG_DM_SPI_FLASH=y
+-CONFIG_CORTINA_SFLASH=y
++CONFIG_CORTINA_QSPI=y
+ 
+ CONFIG_SPI=y
+ CONFIG_SPI_MEM=y
+@@ -50,6 +50,7 @@ CONFIG_SPI_FLASH_STMICRO=y
+ CONFIG_SPI_FLASH_WINBOND=y
+ CONFIG_SPI_FLASH_XMC=y
+ CONFIG_CMD_SF=y
++CONFIG_CMD_SF_TEST=y
+ CONFIG_CMD_SPI=y
+ CONFIG_CMD_FLASH=y
+ 
+diff --git a/drivers/mtd/nand/spi/core.c b/drivers/mtd/nand/spi/core.c
+index a84aa16..8a3d6a3 100644
+--- a/drivers/mtd/nand/spi/core.c
++++ b/drivers/mtd/nand/spi/core.c
+@@ -317,30 +317,24 @@ static int spinand_write_to_cache_op(struct spinand_device *spinand,
+ 	struct nand_device *nand = spinand_to_nand(spinand);
+ 	struct mtd_info *mtd = nanddev_to_mtd(nand);
+ 	struct nand_page_io_req adjreq = *req;
+-	void *buf = spinand->databuf;
+-	unsigned int nbytes;
++	unsigned int nbytes = 0;
++	void *buf = NULL;
+ 	u16 column = 0;
+ 	int ret;
+ 
+-	/*
+-	 * Looks like PROGRAM LOAD (AKA write cache) does not necessarily reset
+-	 * the cache content to 0xFF (depends on vendor implementation), so we
+-	 * must fill the page cache entirely even if we only want to program
+-	 * the data portion of the page, otherwise we might corrupt the BBM or
+-	 * user data previously programmed in OOB area.
+-	 */
+-	nbytes = nanddev_page_size(nand) + nanddev_per_page_oobsize(nand);
+-	memset(spinand->databuf, 0xff, nbytes);
+-	adjreq.dataoffs = 0;
+-	adjreq.datalen = nanddev_page_size(nand);
+-	adjreq.databuf.out = spinand->databuf;
+-	adjreq.ooblen = nanddev_per_page_oobsize(nand);
+-	adjreq.ooboffs = 0;
+-	adjreq.oobbuf.out = spinand->oobbuf;
++	memset(spinand->databuf, 0xff,
++	       nanddev_page_size(nand) +
++	       nanddev_per_page_oobsize(nand));
+ 
+-	if (req->datalen)
++	if (req->datalen) {
+ 		memcpy(spinand->databuf + req->dataoffs, req->databuf.out,
+ 		       req->datalen);
++		adjreq.dataoffs = 0;
++		adjreq.datalen = nanddev_page_size(nand);
++		adjreq.databuf.out = spinand->databuf;
++		nbytes = adjreq.datalen;
++		buf = spinand->databuf;
++	}
+ 
+ 	if (req->ooblen) {
+ 		if (req->mode == MTD_OPS_AUTO_OOB)
+@@ -351,6 +345,14 @@ static int spinand_write_to_cache_op(struct spinand_device *spinand,
+ 		else
+ 			memcpy(spinand->oobbuf + req->ooboffs, req->oobbuf.out,
+ 			       req->ooblen);
++
++		adjreq.ooblen = nanddev_per_page_oobsize(nand);
++		adjreq.ooboffs = 0;
++		nbytes += nanddev_per_page_oobsize(nand);
++		if (!buf) {
++			buf = spinand->oobbuf;
++			column = nanddev_page_size(nand);
++		}
+ 	}
+ 
+ 	spinand_cache_op_adjust_colum(spinand, &adjreq, &column);
+@@ -1035,13 +1037,13 @@ void spinand_show_info(struct spinand_device *spinand)
+ 
+ 	printf("SPI NAND: %s  (0x%02x%02x%02x)\n",
+ 		model, spinand->id.data[1], spinand->id.data[2], spinand->id.data[3]);
+-	printf("   spare: 0x%x      (%dB)\n",
++	printf("   spare: 0x%x       (%dB)\n",
+ 		nanddev_per_page_oobsize(nand),
+ 		nanddev_per_page_oobsize(nand));
+-	printf("    page: 0x%x     (%dKB)\n",
++	printf("    page: 0x%x      (%dKB)\n",
+ 		nanddev_page_size(nand),
+ 		nanddev_page_size(nand) >> 10);
+-	printf("   block: 0x%x   (%dKB)\n",
++	printf("   block: 0x%x    (%dKB)\n",
+ 		nanddev_eraseblock_size(nand),
+ 		nanddev_eraseblock_size(nand) >> 10);
+ 	printf("    chip: 0x%x (%dMB)\n",
+diff --git a/drivers/mtd/spi/sf_internal.h b/drivers/mtd/spi/sf_internal.h
+index 940b2e4..11e413c 100644
+--- a/drivers/mtd/spi/sf_internal.h
++++ b/drivers/mtd/spi/sf_internal.h
+@@ -67,6 +67,8 @@ struct flash_info {
+ #define USE_CLSR		BIT(14)	/* use CLSR command */
+ #define SPI_NOR_HAS_SST26LOCK	BIT(15)	/* Flash supports lock/unlock via BPR */
+ #define SPI_NOR_OCTAL_READ      BIT(16) /* Flash supports Octal Read */
++#define SPI_NOR_QUAD_WRITE_1_1_4	BIT(17)	/* Flash supports Quad Write */
++#define SPI_NOR_QUAD_WRITE_1_4_4	BIT(18)	/* Flash supports Quad Write */
+ };
+ 
+ extern const struct flash_info spi_nor_ids[];
+diff --git a/drivers/mtd/spi/spi-nor-core.c b/drivers/mtd/spi/spi-nor-core.c
+index 7b6ad49..7efba66 100644
+--- a/drivers/mtd/spi/spi-nor-core.c
++++ b/drivers/mtd/spi/spi-nor-core.c
+@@ -2187,12 +2187,19 @@ static int spi_nor_init_params(struct spi_nor *nor,
+ 	spi_nor_set_pp_settings(&params->page_programs[SNOR_CMD_PP],
+ 				SPINOR_OP_PP, SNOR_PROTO_1_1_1);
+ 
+-	if (info->flags & SPI_NOR_QUAD_READ) {
++	if (info->flags & SPI_NOR_QUAD_WRITE_1_1_4) {
+ 		params->hwcaps.mask |= SNOR_HWCAPS_PP_1_1_4;
+ 		spi_nor_set_pp_settings(&params->page_programs[SNOR_CMD_PP_1_1_4],
+ 					SPINOR_OP_PP_1_1_4, SNOR_PROTO_1_1_4);
+ 	}
+ 
++	if (info->flags & SPI_NOR_QUAD_WRITE_1_4_4) {
++		params->hwcaps.mask |= SNOR_HWCAPS_PP_1_4_4;
++		spi_nor_set_pp_settings(&params->page_programs[SNOR_CMD_PP_1_4_4],
++					SPINOR_OP_PP_1_4_4, SNOR_PROTO_1_4_4);
++	}
++
++
+ 	/* Select the procedure to set the Quad Enable bit. */
+ 	if (params->hwcaps.mask & (SNOR_HWCAPS_READ_QUAD |
+ 				   SNOR_HWCAPS_PP_QUAD)) {
+@@ -2499,10 +2506,11 @@ int spi_nor_scan(struct spi_nor *nor)
+ 	} else if (spi->mode & SPI_RX_QUAD) {
+ 		hwcaps.mask |= SNOR_HWCAPS_READ_1_1_4;
+ 
+-		if (spi->mode & SPI_TX_QUAD)
++		if (spi->mode & SPI_TX_QUAD) {
+ 			hwcaps.mask |= (SNOR_HWCAPS_READ_1_4_4 |
+ 					SNOR_HWCAPS_PP_1_1_4 |
+ 					SNOR_HWCAPS_PP_1_4_4);
++		}
+ 	} else if (spi->mode & SPI_RX_DUAL) {
+ 		hwcaps.mask |= SNOR_HWCAPS_READ_1_1_2;
+ 
+diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
+index ce7f26f..5198fa8 100644
+--- a/drivers/mtd/spi/spi-nor-ids.c
++++ b/drivers/mtd/spi/spi-nor-ids.c
+@@ -154,7 +154,9 @@ const struct flash_info spi_nor_ids[] = {
+ 	{ INFO("mx25l25635e", 0xc22019, 0, 64 * 1024, 512, SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ INFO("mx25u25635f", 0xc22539, 0, 64 * 1024, 512, SECT_4K | SPI_NOR_4B_OPCODES) },
+ 	{ INFO("mx25l25655e", 0xc22619, 0, 64 * 1024, 512, 0) },
+-	{ INFO("mx66l51235l", 0xc2201a, 0, 64 * 1024, 1024, SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
++    { INFO("mx25l51245g", 0xc2201a, 0, 64 * 1024, 1024,
++            SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_QUAD_WRITE_1_4_4 | SPI_NOR_4B_OPCODES) },
++/*	{ INFO("mx66l51235l", 0xc2201a, 0, 64 * 1024, 1024, SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) }, */
+ 	{ INFO("mx66u51235f", 0xc2253a, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
+ 	{ INFO("mx66u2g45g",  0xc2253c, 0, 64 * 1024, 4096, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
+ 	{ INFO("mx66l1g45g",  0xc2201b, 0, 64 * 1024, 2048, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+@@ -311,7 +313,7 @@ const struct flash_info spi_nor_ids[] = {
+ 	{ INFO("w25q64cv", 0xef4017, 0, 64 * 1024,  128, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ INFO("w25q128", 0xef4018, 0, 64 * 1024, 256, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ INFO("w25q256", 0xef4019, 0, 64 * 1024, 512, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+-	{ INFO("w25q512IQ", 0xef4020, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_QUAD_READ ) },
++	{ INFO("w25q512IQ", 0xef4020, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_QUAD_WRITE_1_1_4 | SPI_NOR_4B_OPCODES) },
+ 	{ INFO("w25q512IM", 0xef7020, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_QUAD_READ ) },
+ #endif
+ #ifdef CONFIG_SPI_FLASH_XMC
+diff --git a/drivers/spi/ca_sflash.c b/drivers/spi/ca_sflash.c
+index c489703..4da2726 100644
+--- a/drivers/spi/ca_sflash.c
++++ b/drivers/spi/ca_sflash.c
+@@ -163,8 +163,10 @@ struct ca_qspi_regs {
+ 
+ struct ca_qspi {
+ 	struct ca_qspi_regs *regs;
++#if 0
+ 	u8 rx_width;
+ 	u8 tx_width;
++#endif
+ };
+ 
+ /*
+@@ -190,6 +192,7 @@ static int ca_qspi_set_speed(struct udevice *dev, uint speed)
+ 
+ static int ca_qspi_set_mode(struct udevice *dev, uint mode)
+ {
++#if 0
+ 	struct ca_qspi *priv = dev_get_priv(dev);
+ 
+ 	if (mode & SPI_RX_QUAD)
+@@ -208,6 +211,7 @@ static int ca_qspi_set_mode(struct udevice *dev, uint mode)
+ 
+ 	debug("%s: mode=%#x, rx_width=%d, tx_width=%d\n",
+ 		__func__, mode, priv->rx_width, priv->tx_width);
++#endif
+ 	return 0;
+ }
+ 
+@@ -244,9 +248,8 @@ static int ca_qspi_rx(struct ca_qspi *priv,
+ 	u8 *buf, unsigned int data_len)
+ {
+ 	u32 data = 0;
+-	int len = 0;
++	int len = data_len;
+ 
+-	len = data_len;
+ 	while (len >= 4) {
+ 		if (ca_qspi_wait_cmd(priv))
+ 			return -1;
+@@ -286,20 +289,38 @@ static int ca_qspi_tx(struct ca_qspi *priv,
+ 	u8 *buf, unsigned int data_len)
+ {
+ 	u32 data = 0;
+-	int len = 0;
++	int len = data_len;
+ 
+-	len = data_len;
+-	while (len > 0) {
+-		data = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
++	while (len >= 4 ) {
++		data = *buf | (*(buf + 1) << 8)
++			| (*(buf + 2) << 16) | (*(buf + 3) << 24);
+ 		debug("%s: data=0x%08x\n", __func__, data);
+-		/* Fill data */
+ 		writel(data, &priv->regs->dr);
+ 		if (ca_qspi_wait_cmd(priv))
+ 			return -1;
+-
+ 		len -= 4;
+ 		buf += 4;
+ 	}
++	if (len > 0) {
++		data = *buf;
++		switch (len) {
++		case 3:
++			data |= (*(buf + 1) << 8) | ((*(buf + 2)) << 16);
++			break;
++		case 2:
++			data |= (*(buf + 1) << 8);
++			break;
++		case 1:
++			break;
++		default:
++			printf("%s: !err datalen=%d\n", __func__, len);
++			return -1;
++		}
++		writel(data, &priv->regs->dr);
++		if (ca_qspi_wait_cmd(priv))
++			return -1;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -356,6 +377,7 @@ static int ca_qspi_xfer_data(struct ca_qspi *priv,
+ 	}
+ 	if(buf)
+ 		free(buf);
++
+ 	return total_cnt > 0 ? -1 : 0;
+ }
+ 
+@@ -406,8 +428,6 @@ static int ca_qspi_issue_cmd(struct ca_qspi *priv,
+ 	clrsetbits_le32(&priv->regs->ar,
+ 			GENMASK(31, 0), QSPI_ACCODE(opcode));
+ 	if (opcode == QSPI_AC_OP_EXTEND) { /* read_data, wirte_data */
+-		debug("%s: FLASH ACCESS reg=0x%08x\n", __func__,
+-			readl(&priv->regs->ar));
+ 		if (data_cnt > 6) { /* except read_id */
+ 			if (ca_qspi_buswidth_set(priv, op))
+ 				return -1;
+@@ -427,10 +447,8 @@ static int ca_qspi_issue_cmd(struct ca_qspi *priv,
+ 				| QSPI_EXT_DRD_CMD_EN);
+ 		debug("%s: FLASH EXT ACCESS reg=0x%08x\n", __func__,
+ 			readl(&priv->regs->ear));
+-
+ 		if (ca_qspi_xfer_data(priv, op))
+ 			return -1;
+-
+ 		/* Exit burst mode */
+ 		if (data_cnt > 4) {
+ 			setbits_le32(&priv->regs->ar, QSPI_FORCE_TERM);
+@@ -455,10 +473,9 @@ static int ca_qspi_issue_cmd(struct ca_qspi *priv,
+ 			udelay(10);
+ 			return 0;
+ 		}
++		if (ca_qspi_wait_cmd(priv))
++			return -1;
+ 	}
+-	if (ca_qspi_wait_cmd(priv))
+-		return -1;
+-
+ 	return 0;
+ }
+ 
+-- 
+1.8.3.1
+
