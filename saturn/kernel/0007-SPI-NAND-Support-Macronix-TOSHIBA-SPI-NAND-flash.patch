@@ -1,0 +1,157 @@
+From 422dd981ad448a5988d384defd6323096b23baed Mon Sep 17 00:00:00 2001
+From: Jason Li <jason.li@cortina-access.com>
+Date: Mon, 2 Oct 2017 18:17:27 +0800
+Subject: [PATCH 7/8] SPI-NAND: Support Macronix/TOSHIBA SPI-NAND flash.
+
+Signed-off-by: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+---
+ arch/mips/boot/dts/cortina/saturn_spinand.dtsi |  7 +++++--
+ drivers/mtd/spi-nand/chips/cortina_spi_nand.c  | 24 ++++++++++++++----------
+ drivers/mtd/spi-nand/spi-nand-base.c           |  7 +++++++
+ drivers/mtd/spi-nand/spi-nand-cmd.c            |  2 ++
+ include/linux/mtd/spi-nand.h                   |  2 ++
+ 5 files changed, 30 insertions(+), 12 deletions(-)
+
+diff --git a/arch/mips/boot/dts/cortina/saturn_spinand.dtsi b/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+index 0feab5b..7307e82 100755
+--- a/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
++++ b/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+@@ -31,7 +31,10 @@
+ 		compatible = "cortina,spi-nand";
+ 		reg = <0xb2223000 0x40>;
+ 		spinand,mfr-name = "micron";
+-		spinand,spi-mode = <0xA00>;
++		io-mode = <0x0A00>;	/*  #define SPI_TX_QUAD 0x200
++								#define SPI_RX_DUAL 0x400
++								#define SPI_RX_QUAD 0x800
++							*/
+ 
+ 		SSB@0 {
+ 			label = "bootloader";
+@@ -55,7 +58,7 @@
+ 
+ 		rootfs@A00000 {
+ 			label = "rootfs";
+-			reg = <0xA00000 0x1600000>;
++			reg = <0xA00000 0xF000000>;
+ 		};
+ 	};
+ };
+diff --git a/drivers/mtd/spi-nand/chips/cortina_spi_nand.c b/drivers/mtd/spi-nand/chips/cortina_spi_nand.c
+index 91e16cd..e4877b2 100755
+--- a/drivers/mtd/spi-nand/chips/cortina_spi_nand.c
++++ b/drivers/mtd/spi-nand/chips/cortina_spi_nand.c
+@@ -161,6 +161,8 @@ static int spi_nand_manufacture_init(struct spi_nand_chip *chip)
+ {
+ 	switch (chip->mfr_id) {
+ 	case SPINAND_MFR_MICRON:
++	case SPINAND_MFR_MACRONIX:
++	case SPINAND_MFR_TOSHIBA:
+ 		chip->get_ecc_status = spi_nand_mt29f_ecc_status;
+ 
+ 		if (chip->oob_size == 64)
+@@ -1116,22 +1118,16 @@ static int ca_spinand_cmd_fn(struct spi_nand_chip *chip,
+ 		/* Todo */
+ 		break;
+ 	case SPINAND_CMD_READ_FROM_CACHE:
+-		/* Todo */
+-		break;
+ 	case SPINAND_CMD_READ_FROM_CACHE_FAST:
+ 		ret = ca_spinand_read_cache_x1(cmd);
+ 		break;
+ 	case SPINAND_CMD_READ_FROM_CACHE_X2:
+-		ret = ca_spinand_read_cache_x2(cmd);
+-		break;
+ 	case SPINAND_CMD_READ_FROM_CACHE_DUAL_IO:
+-		/* Todo */
++		ret = ca_spinand_read_cache_x2(cmd);
+ 		break;
+ 	case SPINAND_CMD_READ_FROM_CACHE_X4:
+-		ret = ca_spinand_read_cache_x4(cmd);
+-		break;
+ 	case SPINAND_CMD_READ_FROM_CACHE_QUAD_IO:
+-		/* Todo */
++		ret = ca_spinand_read_cache_x4(cmd);
+ 		break;
+ 	case SPINAND_CMD_BLK_ERASE:
+ 		ret = ca_spinand_erase_block(cmd);
+@@ -1186,7 +1182,7 @@ static int ca_spinand_probe(struct platform_device *pdev)
+ 	struct mtd_info *mtd;
+ 	struct mtd_part_parser_data ppdata;
+ 	const char *mfr_name = NULL;
+-	u16 spi_mode;
++	u32 spi_mode;
+ 	int mfr_id, ret;
+ 
+ 	match = of_match_device(ca_spinand_dt_ids, &pdev->dev);
+@@ -1221,7 +1217,11 @@ static int ca_spinand_probe(struct platform_device *pdev)
+ 	chip->mtd = mtd;
+ 	chip->command_fn = ca_spinand_cmd_fn;
+ 
+-	of_property_read_u16(np, "spinand,spi-mode", &spi_mode);
++	if (!of_property_read_u32(np, "io-mode", &spi_mode))
++		printk("SPI-NAND io-mode:%x\n", spi_mode);
++	else
++		spi_mode = 0;
++
+ 	if (spi_mode & SPI_RX_QUAD)
+ 		chip->controller_caps |= SPINAND_RX_QUAD;
+ 	if (spi_mode & SPI_RX_DUAL)
+@@ -1245,6 +1245,10 @@ static int ca_spinand_probe(struct platform_device *pdev)
+ 		mfr_id = SPINAND_MFR_MICRON;
+ 	} else if (!strncmp(mfr_name, "gigadevice", 10)) {
+ 		mfr_id = SPINAND_MFR_GIGADEVICE;
++	} else if (!strncmp(mfr_name, "macronix", 10)) {
++		mfr_id = SPINAND_MFR_MACRONIX;
++	} else if (!strncmp(mfr_name, "toshiba", 10)) {
++		mfr_id = SPINAND_MFR_TOSHIBA;
+ 	} else {
+ 		printk("Unknown SPI-NAND Device Manufactory ID!\n");
+ 		goto err3;
+diff --git a/drivers/mtd/spi-nand/spi-nand-base.c b/drivers/mtd/spi-nand/spi-nand-base.c
+index 7f004d4..7ed2b39 100755
+--- a/drivers/mtd/spi-nand/spi-nand-base.c
++++ b/drivers/mtd/spi-nand/spi-nand-base.c
+@@ -42,6 +42,13 @@ static struct spi_nand_flash spi_nand_table[] = {
+ 				SPINAND_NEED_DIE_SELECT),
+ 	SPI_NAND_INFO("MT29F2G01ABAGD", 0x2C, 0x24, 2048, 128, 64, 2048,
+ 			1, 8, SPINAND_NEED_PLANE_SELECT),
++
++	/* Macronix */
++	SPI_NAND_INFO("MX35LF1GE4AB", 0xC2, 0x12, 2048, 64, 64, 1024,
++			1, 4, 0),
++	SPI_NAND_INFO("MX35LF2GE4AB", 0xC2, 0x22, 2048, 64, 64, 2048,
++			1, 4, 0),
++
+ 	SPI_NAND_INFO("GD5F 512MiB 1.8V", 0xC8, 0xA4, 4096, 256, 64, 2048,
+ 			1, 8, 0),
+ 	SPI_NAND_INFO("GD5F 512MiB 3.3V", 0xC8, 0xB4, 4096, 256, 64, 2048,
+diff --git a/drivers/mtd/spi-nand/spi-nand-cmd.c b/drivers/mtd/spi-nand/spi-nand-cmd.c
+index ff21e44..bba5595 100755
+--- a/drivers/mtd/spi-nand/spi-nand-cmd.c
++++ b/drivers/mtd/spi-nand/spi-nand-cmd.c
+@@ -83,6 +83,8 @@ int spi_nand_set_cmd_cfg_table(int mfr_id)
+ {
+ 	switch (mfr_id) {
+ 	case SPINAND_MFR_MICRON:
++	case SPINAND_MFR_MACRONIX:
++	case SPINAND_MFR_TOSHIBA:
+ 		cmd_table = micron_cmd_cfg_table;
+ 		break;
+ 	case SPINAND_MFR_GIGADEVICE:
+diff --git a/include/linux/mtd/spi-nand.h b/include/linux/mtd/spi-nand.h
+index 1443af9..cd7513b 100755
+--- a/include/linux/mtd/spi-nand.h
++++ b/include/linux/mtd/spi-nand.h
+@@ -346,6 +346,8 @@ struct spi_nand_cmd_cfg {
+ 
+ #define SPINAND_MFR_MICRON		0x2C
+ #define SPINAND_MFR_GIGADEVICE	0xC8
++#define SPINAND_MFR_MACRONIX	0xC2
++#define SPINAND_MFR_TOSHIBA		0x98
+ #define SPINAND_MAX_ID_LEN		2
+ 
+ 
+-- 
+1.8.3.1
+

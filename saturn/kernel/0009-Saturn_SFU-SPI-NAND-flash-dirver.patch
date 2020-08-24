@@ -1,0 +1,29 @@
+From f82d79a09a4b1e08cadbdc0fae110a546316f1ad Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+Date: Thu, 12 Oct 2017 17:35:06 +0800
+Subject: [PATCH 9/9] Saturn_SFU: SPI-NAND flash dirver. 	Add partitions
+ which named for "userdata" on devicetree.
+
+Signed-off-by: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+---
+ arch/mips/boot/dts/cortina/saturn_spinand.dtsi | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/mips/boot/dts/cortina/saturn_spinand.dtsi b/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+index 7307e82..6ef8269 100755
+--- a/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
++++ b/arch/mips/boot/dts/cortina/saturn_spinand.dtsi
+@@ -60,5 +60,10 @@
+ 			label = "rootfs";
+ 			reg = <0xA00000 0xF000000>;
+ 		};
++
++		userdata@FA00000 {
++			label = "userdata";
++			reg = <0xFA00000 0x400000>;
++		};
+ 	};
+ };
+-- 
+1.8.3.1
+

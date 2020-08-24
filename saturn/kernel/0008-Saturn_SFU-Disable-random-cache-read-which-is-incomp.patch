@@ -1,0 +1,29 @@
+From 7db1ac0a50d9b0562f6c732f1383d4cb8a465333 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+Date: Wed, 11 Oct 2017 15:27:55 +0800
+Subject: [PATCH 8/8] Saturn_SFU: Disable random cache read which is
+ incompatible with other Flash vendor. driver/mtd/spi-nand-base.c (Jason help
+ to fix this issue)
+
+Signed-off-by: Pengpeng Chen <Pengpeng.Chen@cortina-access.com>
+---
+ drivers/mtd/spi-nand/spi-nand-base.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/mtd/spi-nand/spi-nand-base.c b/drivers/mtd/spi-nand/spi-nand-base.c
+index 7ed2b39..5af1358 100755
+--- a/drivers/mtd/spi-nand/spi-nand-base.c
++++ b/drivers/mtd/spi-nand/spi-nand-base.c
+@@ -1033,6 +1033,9 @@ out:
+ static inline bool is_read_page_fast_benefit(struct spi_nand_chip *chip,
+ 			loff_t from, size_t len)
+ {
++	/* Disable random cache read which is incompatible with other Flash vendor. */
++	return false;
++
+ 	if (len < chip->page_size << 2)
+ 		return false;
+ 	if (from >> chip->lun_shift == (from + len) >> chip->lun_shift)
+-- 
+1.8.3.1
+
