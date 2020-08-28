@@ -1,0 +1,628 @@
+From ece0bfe3b67de129e6ce9b6b9688af70494440a7 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Mon, 24 Aug 2020 16:02:45 +0800
+Subject: [PATCH] Extend the support list for spi-nand devices
+
+Currently, spi-nand device support list table includes
+- - - - - - - - - - - - - - - - - - - - - - - -
+-     MXIC - MX35LF1GE4AB / MX35LF2GE4AB      -
+- WINDBOND - W25N01GVZEIR / W25M02GVZEIR      -
+-   MICRON - MT29F2G01ABAG / MT29F1G01ABAF    -
+-  TOSHIBA - TC58CVG2S0Hx / TC58CVG1S3HRAIJ   -
+- - - - - - - - - - - - - - - - - - - - - - - -
+---
+ configs/cortina_saturn2-engboard-nor_defconfig |   1 +
+ drivers/mtd/nand/spi/Makefile                  |   2 +-
+ drivers/mtd/nand/spi/core.c                    |   3 +
+ drivers/mtd/nand/spi/macronix.c                |   1 +
+ drivers/mtd/nand/spi/micron.c                  | 151 +++++++++++--
+ drivers/mtd/nand/spi/toshiba.c                 | 289 +++++++++++++++++++++++++
+ drivers/mtd/nand/spi/winbond.c                 |   1 +
+ include/linux/mtd/spinand.h                    |   2 +
+ 8 files changed, 435 insertions(+), 15 deletions(-)
+ create mode 100644 drivers/mtd/nand/spi/toshiba.c
+
+diff --git a/configs/cortina_saturn2-engboard-nor_defconfig b/configs/cortina_saturn2-engboard-nor_defconfig
+index de02cc2..ff9826b 100644
+--- a/configs/cortina_saturn2-engboard-nor_defconfig
++++ b/configs/cortina_saturn2-engboard-nor_defconfig
+@@ -50,6 +50,7 @@ CONFIG_SPI_FLASH_WINBOND=y
+ CONFIG_SPI_FLASH_XMC=y
+ CONFIG_CMD_SPI=y
+ CONFIG_CMD_SF=y
++CONFIG_CMD_SF_TEST=y
+ CONFIG_CMD_MTD=y
+ CONFIG_MTD=y
+ CONFIG_SPI_FLASH_MTD=y
+diff --git a/drivers/mtd/nand/spi/Makefile b/drivers/mtd/nand/spi/Makefile
+index dd6baca..6c65b18 100644
+--- a/drivers/mtd/nand/spi/Makefile
++++ b/drivers/mtd/nand/spi/Makefile
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+-spinand-objs := core.o gigadevice.o macronix.o micron.o winbond.o
++spinand-objs := core.o gigadevice.o macronix.o micron.o toshiba.o winbond.o
+ obj-$(CONFIG_MTD_SPI_NAND) += spinand.o
+diff --git a/drivers/mtd/nand/spi/core.c b/drivers/mtd/nand/spi/core.c
+index 6960245..af3602f 100644
+--- a/drivers/mtd/nand/spi/core.c
++++ b/drivers/mtd/nand/spi/core.c
+@@ -26,6 +26,8 @@
+ #include <spi-mem.h>
+ #include <dm/device_compat.h>
+ #include <dm/devres.h>
++#include <linux/bitops.h>
++#include <linux/bug.h>
+ #include <linux/mtd/spinand.h>
+ #endif
+ 
+@@ -835,6 +837,7 @@ static const struct spinand_manufacturer *spinand_manufacturers[] = {
+ 	&gigadevice_spinand_manufacturer,
+ 	&macronix_spinand_manufacturer,
+ 	&micron_spinand_manufacturer,
++	&toshiba_spinand_manufacturer,
+ 	&winbond_spinand_manufacturer,
+ };
+ 
+diff --git a/drivers/mtd/nand/spi/macronix.c b/drivers/mtd/nand/spi/macronix.c
+index 67d092b..215f09a 100644
+--- a/drivers/mtd/nand/spi/macronix.c
++++ b/drivers/mtd/nand/spi/macronix.c
+@@ -10,6 +10,7 @@
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+ #endif
++#include <linux/bug.h>
+ #include <linux/mtd/spinand.h>
+ 
+ #define SPINAND_MFR_MACRONIX		0xC2
+diff --git a/drivers/mtd/nand/spi/micron.c b/drivers/mtd/nand/spi/micron.c
+index 687306e..6bacf14 100644
+--- a/drivers/mtd/nand/spi/micron.c
++++ b/drivers/mtd/nand/spi/micron.c
+@@ -11,6 +11,7 @@
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+ #endif
++#include <linux/bitops.h>
+ #include <linux/mtd/spinand.h>
+ 
+ #define SPINAND_MFR_MICRON		0x2c
+@@ -21,6 +22,16 @@
+ #define MICRON_STATUS_ECC_4TO6_BITFLIPS	(3 << 4)
+ #define MICRON_STATUS_ECC_7TO8_BITFLIPS	(5 << 4)
+ 
++#define MICRON_CFG_CR			BIT(0)
++
++/*
++ * As per datasheet, die selection is done by the 6th bit of Die
++ * Select Register (Address 0xD0).
++ */
++#define MICRON_DIE_SELECT_REG	0xD0
++
++#define MICRON_SELECT_DIE(x)	((x) << 6)
++
+ static SPINAND_OP_VARIANTS(read_cache_variants,
+ 		SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X4_OP(0, 1, NULL, 0),
+@@ -37,38 +48,52 @@ static SPINAND_OP_VARIANTS(update_cache_variants,
+ 		SPINAND_PROG_LOAD_X4(false, 0, NULL, 0),
+ 		SPINAND_PROG_LOAD(false, 0, NULL, 0));
+ 
+-static int mt29f2g01abagd_ooblayout_ecc(struct mtd_info *mtd, int section,
+-					struct mtd_oob_region *region)
++static int micron_8_ooblayout_ecc(struct mtd_info *mtd, int section,
++				  struct mtd_oob_region *region)
+ {
+ 	if (section)
+ 		return -ERANGE;
+ 
+-	region->offset = 64;
+-	region->length = 64;
++	region->offset = mtd->oobsize / 2;
++	region->length = mtd->oobsize / 2;
+ 
+ 	return 0;
+ }
+ 
+-static int mt29f2g01abagd_ooblayout_free(struct mtd_info *mtd, int section,
+-					 struct mtd_oob_region *region)
++static int micron_8_ooblayout_free(struct mtd_info *mtd, int section,
++				   struct mtd_oob_region *region)
+ {
+ 	if (section)
+ 		return -ERANGE;
+ 
+ 	/* Reserve 2 bytes for the BBM. */
+ 	region->offset = 2;
+-	region->length = 62;
++	region->length = (mtd->oobsize / 2) - 2;
+ 
+ 	return 0;
+ }
+ 
+-static const struct mtd_ooblayout_ops mt29f2g01abagd_ooblayout = {
+-	.ecc = mt29f2g01abagd_ooblayout_ecc,
+-	.rfree = mt29f2g01abagd_ooblayout_free,
++static const struct mtd_ooblayout_ops micron_8_ooblayout = {
++	.ecc = micron_8_ooblayout_ecc,
++	.rfree = micron_8_ooblayout_free,
+ };
+ 
+-static int mt29f2g01abagd_ecc_get_status(struct spinand_device *spinand,
+-					 u8 status)
++static int micron_select_target(struct spinand_device *spinand,
++				unsigned int target)
++{
++	struct spi_mem_op op = SPINAND_SET_FEATURE_OP(MICRON_DIE_SELECT_REG,
++						      spinand->scratchbuf);
++
++	if (target > 1)
++		return -EINVAL;
++
++	*spinand->scratchbuf = MICRON_SELECT_DIE(target);
++
++	return spi_mem_exec_op(spinand->slave, &op);
++}
++
++static int micron_8_ecc_get_status(struct spinand_device *spinand,
++				   u8 status)
+ {
+ 	switch (status & MICRON_STATUS_ECC_MASK) {
+ 	case STATUS_ECC_NO_BITFLIPS:
+@@ -94,6 +119,7 @@ static int mt29f2g01abagd_ecc_get_status(struct spinand_device *spinand,
+ }
+ 
+ static const struct spinand_info micron_spinand_table[] = {
++	/* M79A 2Gb 3.3V */
+ 	SPINAND_INFO("MT29F2G01ABAGD", 0x24,
+ 		     NAND_MEMORG(1, 2048, 128, 64, 2048, 2, 1, 1),
+ 		     NAND_ECCREQ(8, 512),
+@@ -101,8 +127,91 @@ static const struct spinand_info micron_spinand_table[] = {
+ 					      &write_cache_variants,
+ 					      &update_cache_variants),
+ 		     0,
+-		     SPINAND_ECCINFO(&mt29f2g01abagd_ooblayout,
+-				     mt29f2g01abagd_ecc_get_status)),
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status)),
++	/* M79A 2Gb 1.8V */
++	SPINAND_INFO("MT29F2G01ABBGD", 0x25,
++		     NAND_MEMORG(1, 2048, 128, 64, 2048, 2, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status)),
++	/* M78A 1Gb 3.3V */
++	SPINAND_INFO("MT29F1G01ABAFD", 0x14,
++		     NAND_MEMORG(1, 2048, 128, 64, 1024, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status)),
++	/* M78A 1Gb 1.8V */
++	SPINAND_INFO("MT29F1G01ABAFD", 0x15,
++		     NAND_MEMORG(1, 2048, 128, 64, 1024, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status)),
++	/* M79A 4Gb 3.3V */
++	SPINAND_INFO("MT29F4G01ADAGD", 0x36,
++		     NAND_MEMORG(1, 2048, 128, 64, 2048, 2, 1, 2),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status),
++		     SPINAND_SELECT_TARGET(micron_select_target)),
++	/* M70A 4Gb 3.3V */
++	SPINAND_INFO("MT29F4G01ABAFD", 0x34,
++		     NAND_MEMORG(1, 4096, 256, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     SPINAND_HAS_CR_FEAT_BIT,
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status)),
++	/* M70A 4Gb 1.8V */
++	SPINAND_INFO("MT29F4G01ABBFD", 0x35,
++		     NAND_MEMORG(1, 4096, 256, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     SPINAND_HAS_CR_FEAT_BIT,
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status)),
++	/* M70A 8Gb 3.3V */
++	SPINAND_INFO("MT29F8G01ADAFD", 0x46,
++		     NAND_MEMORG(1, 4096, 256, 64, 2048, 1, 1, 2),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     SPINAND_HAS_CR_FEAT_BIT,
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status),
++		     SPINAND_SELECT_TARGET(micron_select_target)),
++	/* M70A 8Gb 1.8V */
++	SPINAND_INFO("MT29F8G01ADBFD", 0x47,
++		     NAND_MEMORG(1, 4096, 256, 64, 2048, 1, 1, 2),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     SPINAND_HAS_CR_FEAT_BIT,
++		     SPINAND_ECCINFO(&micron_8_ooblayout,
++				     micron_8_ecc_get_status),
++		     SPINAND_SELECT_TARGET(micron_select_target)),
+ };
+ 
+ static int micron_spinand_detect(struct spinand_device *spinand)
+@@ -125,8 +234,22 @@ static int micron_spinand_detect(struct spinand_device *spinand)
+ 	return 1;
+ }
+ 
++static int micron_spinand_init(struct spinand_device *spinand)
++{
++	/*
++	 * M70A device series enable Continuous Read feature at Power-up,
++	 * which is not supported. Disable this bit to avoid any possible
++	 * failure.
++	 */
++	if (spinand->flags & SPINAND_HAS_CR_FEAT_BIT)
++		return spinand_upd_cfg(spinand, MICRON_CFG_CR, 0);
++
++	return 0;
++}
++
+ static const struct spinand_manufacturer_ops micron_spinand_manuf_ops = {
+ 	.detect = micron_spinand_detect,
++	.init = micron_spinand_init,
+ };
+ 
+ const struct spinand_manufacturer micron_spinand_manufacturer = {
+diff --git a/drivers/mtd/nand/spi/toshiba.c b/drivers/mtd/nand/spi/toshiba.c
+new file mode 100644
+index 0000000..c2cd3b4
+--- /dev/null
++++ b/drivers/mtd/nand/spi/toshiba.c
+@@ -0,0 +1,289 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2018 exceet electronics GmbH
++ * Copyright (c) 2018 Kontron Electronics GmbH
++ *
++ * Author: Frieder Schrempf <frieder.schrempf@kontron.de>
++ */
++
++#ifndef __UBOOT__
++#include <malloc.h>
++#include <linux/device.h>
++#include <linux/kernel.h>
++#endif
++#include <linux/bug.h>
++#include <linux/mtd/spinand.h>
++
++#define SPINAND_MFR_TOSHIBA		0x98
++#define TOSH_STATUS_ECC_HAS_BITFLIPS_T	(3 << 4)
++
++static SPINAND_OP_VARIANTS(read_cache_variants,
++		SPINAND_PAGE_READ_FROM_CACHE_X4_OP(0, 1, NULL, 0),
++		SPINAND_PAGE_READ_FROM_CACHE_X2_OP(0, 1, NULL, 0),
++		SPINAND_PAGE_READ_FROM_CACHE_OP(true, 0, 1, NULL, 0),
++		SPINAND_PAGE_READ_FROM_CACHE_OP(false, 0, 1, NULL, 0));
++
++static SPINAND_OP_VARIANTS(write_cache_x4_variants,
++		SPINAND_PROG_LOAD_X4(true, 0, NULL, 0),
++		SPINAND_PROG_LOAD(true, 0, NULL, 0));
++
++static SPINAND_OP_VARIANTS(update_cache_x4_variants,
++		SPINAND_PROG_LOAD_X4(false, 0, NULL, 0),
++		SPINAND_PROG_LOAD(false, 0, NULL, 0));
++
++/**
++ * Backward compatibility for 1st generation Serial NAND devices
++ * which don't support Quad Program Load operation.
++ */
++static SPINAND_OP_VARIANTS(write_cache_variants,
++		SPINAND_PROG_LOAD(true, 0, NULL, 0));
++
++static SPINAND_OP_VARIANTS(update_cache_variants,
++		SPINAND_PROG_LOAD(false, 0, NULL, 0));
++
++static int tx58cxgxsxraix_ooblayout_ecc(struct mtd_info *mtd, int section,
++				     struct mtd_oob_region *region)
++{
++	if (section > 0)
++		return -ERANGE;
++
++	region->offset = mtd->oobsize / 2;
++	region->length = mtd->oobsize / 2;
++
++	return 0;
++}
++
++static int tx58cxgxsxraix_ooblayout_free(struct mtd_info *mtd, int section,
++				      struct mtd_oob_region *region)
++{
++	if (section > 0)
++		return -ERANGE;
++
++	/* 2 bytes reserved for BBM */
++	region->offset = 2;
++	region->length = (mtd->oobsize / 2) - 2;
++
++	return 0;
++}
++
++static const struct mtd_ooblayout_ops tx58cxgxsxraix_ooblayout = {
++	.ecc = tx58cxgxsxraix_ooblayout_ecc,
++	.rfree = tx58cxgxsxraix_ooblayout_free,
++};
++
++static int tx58cxgxsxraix_ecc_get_status(struct spinand_device *spinand,
++				      u8 status)
++{
++	struct nand_device *nand = spinand_to_nand(spinand);
++	u8 mbf = 0;
++	struct spi_mem_op op = SPINAND_GET_FEATURE_OP(0x30, &mbf);
++
++	switch (status & STATUS_ECC_MASK) {
++	case STATUS_ECC_NO_BITFLIPS:
++		return 0;
++
++	case STATUS_ECC_UNCOR_ERROR:
++		return -EBADMSG;
++
++	case STATUS_ECC_HAS_BITFLIPS:
++	case TOSH_STATUS_ECC_HAS_BITFLIPS_T:
++		/*
++		 * Let's try to retrieve the real maximum number of bitflips
++		 * in order to avoid forcing the wear-leveling layer to move
++		 * data around if it's not necessary.
++		 */
++		if (spi_mem_exec_op(spinand->slave, &op))
++			return nand->eccreq.strength;
++
++		mbf >>= 4;
++
++		if (WARN_ON(mbf > nand->eccreq.strength || !mbf))
++			return nand->eccreq.strength;
++
++		return mbf;
++
++	default:
++		break;
++	}
++
++	return -EINVAL;
++}
++
++static const struct spinand_info toshiba_spinand_table[] = {
++	/* 3.3V 1Gb (1st generation) */
++	SPINAND_INFO("TC58CVG0S3HRAIG", 0xC2,
++		     NAND_MEMORG(1, 2048, 128, 64, 1024, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 3.3V 2Gb (1st generation) */
++	SPINAND_INFO("TC58CVG1S3HRAIG", 0xCB,
++		     NAND_MEMORG(1, 2048, 128, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 3.3V 4Gb (1st generation) */
++	SPINAND_INFO("TC58CVG2S0HRAIG", 0xCD,
++		     NAND_MEMORG(1, 4096, 256, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 1.8V 1Gb (1st generation) */
++	SPINAND_INFO("TC58CYG0S3HRAIG", 0xB2,
++		     NAND_MEMORG(1, 2048, 128, 64, 1024, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 1.8V 2Gb (1st generation) */
++	SPINAND_INFO("TC58CYG1S3HRAIG", 0xBB,
++		     NAND_MEMORG(1, 2048, 128, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 1.8V 4Gb (1st generation) */
++	SPINAND_INFO("TC58CYG2S0HRAIG", 0xBD,
++		     NAND_MEMORG(1, 4096, 256, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_variants,
++					      &update_cache_variants),
++		     0,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++
++	/*
++	 * 2nd generation serial nand has HOLD_D which is equivalent to
++	 * QE_BIT.
++	 */
++	/* 3.3V 1Gb (2nd generation) */
++	SPINAND_INFO("TC58CVG0S3HRAIJ", 0xE2,
++		     NAND_MEMORG(1, 2048, 128, 64, 1024, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_x4_variants,
++					      &update_cache_x4_variants),
++		     SPINAND_HAS_QE_BIT,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 3.3V 2Gb (2nd generation) */
++	SPINAND_INFO("TC58CVG1S3HRAIJ", 0xEB,
++		     NAND_MEMORG(1, 2048, 128, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_x4_variants,
++					      &update_cache_x4_variants),
++		     SPINAND_HAS_QE_BIT,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 3.3V 4Gb (2nd generation) */
++	SPINAND_INFO("TC58CVG2S0HRAIJ", 0xED,
++		     NAND_MEMORG(1, 4096, 256, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_x4_variants,
++					      &update_cache_x4_variants),
++		     SPINAND_HAS_QE_BIT,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 3.3V 8Gb (2nd generation) */
++	SPINAND_INFO("TH58CVG3S0HRAIJ", 0xE4,
++		     NAND_MEMORG(1, 4096, 256, 64, 4096, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_x4_variants,
++					      &update_cache_x4_variants),
++		     SPINAND_HAS_QE_BIT,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 1.8V 1Gb (2nd generation) */
++	SPINAND_INFO("TC58CYG0S3HRAIJ", 0xD2,
++		     NAND_MEMORG(1, 2048, 128, 64, 1024, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_x4_variants,
++					      &update_cache_x4_variants),
++		     SPINAND_HAS_QE_BIT,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 1.8V 2Gb (2nd generation) */
++	SPINAND_INFO("TC58CYG1S3HRAIJ", 0xDB,
++		     NAND_MEMORG(1, 2048, 128, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_x4_variants,
++					      &update_cache_x4_variants),
++		     SPINAND_HAS_QE_BIT,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 1.8V 4Gb (2nd generation) */
++	SPINAND_INFO("TC58CYG2S0HRAIJ", 0xDD,
++		     NAND_MEMORG(1, 4096, 256, 64, 2048, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_x4_variants,
++					      &update_cache_x4_variants),
++		     SPINAND_HAS_QE_BIT,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++	/* 1.8V 8Gb (2nd generation) */
++	SPINAND_INFO("TH58CYG3S0HRAIJ", 0xD4,
++		     NAND_MEMORG(1, 4096, 256, 64, 4096, 1, 1, 1),
++		     NAND_ECCREQ(8, 512),
++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
++					      &write_cache_x4_variants,
++					      &update_cache_x4_variants),
++		     SPINAND_HAS_QE_BIT,
++		     SPINAND_ECCINFO(&tx58cxgxsxraix_ooblayout,
++				     tx58cxgxsxraix_ecc_get_status)),
++};
++
++static int toshiba_spinand_detect(struct spinand_device *spinand)
++{
++	u8 *id = spinand->id.data;
++	int ret;
++
++	/*
++	 * Toshiba SPI NAND read ID needs a dummy byte,
++	 * so the first byte in id is garbage.
++	 */
++	if (id[1] != SPINAND_MFR_TOSHIBA)
++		return 0;
++
++	ret = spinand_match_and_init(spinand, toshiba_spinand_table,
++				     ARRAY_SIZE(toshiba_spinand_table),
++				     id[2]);
++	if (ret)
++		return ret;
++
++	return 1;
++}
++
++static const struct spinand_manufacturer_ops toshiba_spinand_manuf_ops = {
++	.detect = toshiba_spinand_detect,
++};
++
++const struct spinand_manufacturer toshiba_spinand_manufacturer = {
++	.id = SPINAND_MFR_TOSHIBA,
++	.name = "Toshiba",
++	.ops = &toshiba_spinand_manuf_ops,
++};
+diff --git a/drivers/mtd/nand/spi/winbond.c b/drivers/mtd/nand/spi/winbond.c
+index 6ede98c..c119486 100644
+--- a/drivers/mtd/nand/spi/winbond.c
++++ b/drivers/mtd/nand/spi/winbond.c
+@@ -12,6 +12,7 @@
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+ #endif
++#include <linux/bitops.h>
+ #include <linux/mtd/spinand.h>
+ 
+ #define SPINAND_MFR_WINBOND		0xEF
+diff --git a/include/linux/mtd/spinand.h b/include/linux/mtd/spinand.h
+index be01e1e..88bacde 100644
+--- a/include/linux/mtd/spinand.h
++++ b/include/linux/mtd/spinand.h
+@@ -204,6 +204,7 @@ struct spinand_manufacturer {
+ extern const struct spinand_manufacturer gigadevice_spinand_manufacturer;
+ extern const struct spinand_manufacturer macronix_spinand_manufacturer;
+ extern const struct spinand_manufacturer micron_spinand_manufacturer;
++extern const struct spinand_manufacturer toshiba_spinand_manufacturer;
+ extern const struct spinand_manufacturer winbond_spinand_manufacturer;
+ 
+ /**
+@@ -245,6 +246,7 @@ struct spinand_ecc_info {
+ };
+ 
+ #define SPINAND_HAS_QE_BIT		BIT(0)
++#define SPINAND_HAS_CR_FEAT_BIT		BIT(1)
+ 
+ /**
+  * struct spinand_info - Structure used to describe SPI NAND chips
+-- 
+1.8.3.1
+

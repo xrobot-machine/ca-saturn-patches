@@ -1,0 +1,88 @@
+From 348737eaf4649a4315d857a618d7634a536e493a Mon Sep 17 00:00:00 2001
+From: Lee Jenfeng <jenfeng.lee@cortina-access.com>
+Date: Thu, 20 Aug 2020 11:24:57 +0800
+Subject: [PATCH 11/15] Enable ethernet support in Saturn2
+
+---
+ arch/mips/dts/ca-saturn2-engboard.dts           |  7 +++++++
+ board/cortina/saturn2/saturn2.c                 | 13 +++++++++++++
+ configs/cortina_saturn2-engboard-nand_defconfig |  9 +++++++++
+ configs/cortina_saturn2-engboard-nor_defconfig  |  8 ++++++++
+ 4 files changed, 37 insertions(+)
+
+diff --git a/arch/mips/dts/ca-saturn2-engboard.dts b/arch/mips/dts/ca-saturn2-engboard.dts
+index 1e096a46ea..9027b50f30 100644
+--- a/arch/mips/dts/ca-saturn2-engboard.dts
++++ b/arch/mips/dts/ca-saturn2-engboard.dts
+@@ -37,4 +37,11 @@
+ 			reg = <0>;
+ 		};
+ 	};
++
++       eth: ethnet@0xb4000000{
++	     compatible = "eth_cortina";
++	     reg = <0x0 0xbc100000 0x34>,
++		   <0x0 0xb22240d8 0x04>,
++		   <0x0 0xb4004000 0x04>;
++        };
+ };
+diff --git a/board/cortina/saturn2/saturn2.c b/board/cortina/saturn2/saturn2.c
+index 4c82572ded..f27e8a426a 100644
+--- a/board/cortina/saturn2/saturn2.c
++++ b/board/cortina/saturn2/saturn2.c
+@@ -84,6 +84,19 @@ static int init_spinor(void)
+ }
+ #endif
+ 
++#if defined(CONFIG_CORTINA_NI_ENET)
++/*
++ * Board specific ethernet initialization routine.
++ */
++int ca77xx_eth_initialize(bd_t *bis);
++int board_eth_init(bd_t *bis)
++{
++	ca77xx_eth_initialize(bis);
++
++	return 0;
++}
++#endif
++
+ int board_early_init_r(void)
+ {
+ 	dcache_disable();
+diff --git a/configs/cortina_saturn2-engboard-nand_defconfig b/configs/cortina_saturn2-engboard-nand_defconfig
+index fec260c131..b012ea79cb 100644
+--- a/configs/cortina_saturn2-engboard-nand_defconfig
++++ b/configs/cortina_saturn2-engboard-nand_defconfig
+@@ -50,3 +50,12 @@ CONFIG_ENV_SIZE=0x20000
+ CONFIG_ENV_ADDR=0x400000
+ CONFIG_ENV_OFFSET=0x400000
+ CONFIG_ENV_RANGE=0x100000
++
++# Ethernet Support
++CONFIG_NET_RANDOM_ETHADDR=y
++CONFIG_PHYLIB=y
++CONFIG_DM_ETH=y
++CONFIG_CORTINA_NI_ENET=y
++CONFIG_NET=y
++CONFIG_CMD_NET=y
++CONFIG_CMD_PING=y
+diff --git a/configs/cortina_saturn2-engboard-nor_defconfig b/configs/cortina_saturn2-engboard-nor_defconfig
+index 3d3bcf7626..56cdcda6d9 100644
+--- a/configs/cortina_saturn2-engboard-nor_defconfig
++++ b/configs/cortina_saturn2-engboard-nor_defconfig
+@@ -59,3 +59,11 @@ CONFIG_ENV_SIZE=0x40000
+ CONFIG_ENV_SECT_SIZE=0x40000
+ CONFIG_ENV_OFFSET=0x300000
+ CONFIG_ENV_IS_IN_SPI_FLASH=y
++# Ethernet Support
++CONFIG_NET_RANDOM_ETHADDR=y
++CONFIG_PHYLIB=y
++CONFIG_DM_ETH=y
++CONFIG_CORTINA_NI_ENET=y
++CONFIG_NET=y
++CONFIG_CMD_NET=y
++CONFIG_CMD_PING=y
+-- 
+2.20.1
+

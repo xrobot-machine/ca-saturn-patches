@@ -1,0 +1,493 @@
+From a8d8539cdbfe7e5d2d5405fef8d34e92839fe2e2 Mon Sep 17 00:00:00 2001
+From: Lee Jenfeng <jenfeng.lee@cortina-access.com>
+Date: Thu, 30 Apr 2020 18:28:47 +0800
+Subject: [PATCH 01/15] board: saturn2: Add basic Saturn2 engr. development
+ board support
+
+Add basic Saturn2 engineering board support
+---
+ arch/mips/Kconfig                      |   5 +
+ arch/mips/cpu/start.S                  |  21 +++
+ arch/mips/dts/Makefile                 |   1 +
+ arch/mips/dts/ca-saturn2-engboard.dts  |  25 ++++
+ arch/mips/include/asm/system.h         |   2 +-
+ arch/mips/lib/cache_init.S             |   4 +-
+ board/cortina/saturn2/Kconfig          |  25 ++++
+ board/cortina/saturn2/Makefile         |   7 +
+ board/cortina/saturn2/saturn2.c        | 170 +++++++++++++++++++++++++
+ configs/cortina_saturn2-base_defconfig |  29 +++++
+ drivers/watchdog/cortina_wdt.c         |   1 +
+ include/configs/saturn2.h              |  27 ++++
+ 12 files changed, 314 insertions(+), 3 deletions(-)
+ create mode 100644 arch/mips/dts/ca-saturn2-engboard.dts
+ create mode 100644 board/cortina/saturn2/Kconfig
+ create mode 100644 board/cortina/saturn2/Makefile
+ create mode 100644 board/cortina/saturn2/saturn2.c
+ create mode 100644 configs/cortina_saturn2-base_defconfig
+ create mode 100644 include/configs/saturn2.h
+
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+index a3ae603044..62372c736a 100644
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -147,12 +147,17 @@ config TARGET_XILFPGA
+ 	help
+ 	  This supports IMGTEC MIPSfpga platform
+ 
++config TARGET_SATURN2
++	bool "Support Cortina-Access Saturn2 Platform"
++        select SUPPORTS_LITTLE_ENDIAN
++        select 32BIT
+ endchoice
+ 
+ source "board/imgtec/boston/Kconfig"
+ source "board/imgtec/malta/Kconfig"
+ source "board/imgtec/xilfpga/Kconfig"
+ source "board/qemu-mips/Kconfig"
++source "board/cortina/saturn2/Kconfig"
+ source "arch/mips/mach-ath79/Kconfig"
+ source "arch/mips/mach-mscc/Kconfig"
+ source "arch/mips/mach-bmips/Kconfig"
+diff --git a/arch/mips/cpu/start.S b/arch/mips/cpu/start.S
+index 1d21b2324a..481549d9fe 100644
+--- a/arch/mips/cpu/start.S
++++ b/arch/mips/cpu/start.S
+@@ -10,6 +10,7 @@
+ #include <asm/asm.h>
+ #include <asm/regdef.h>
+ #include <asm/mipsregs.h>
++#define CONFIG_SOC_CPU_RLX
+ 
+ #ifndef CONFIG_SYS_INIT_SP_ADDR
+ #define CONFIG_SYS_INIT_SP_ADDR	(CONFIG_SYS_SDRAM_BASE + \
+@@ -33,6 +34,19 @@
+ # define STATUS_SET	ST0_KX
+ #endif
+ 
++#if defined(CONFIG_SOC_CPU_RLX)
++	.macro  read_cpu_id reg
++	mfc0    \reg, CP0_PRID
++	srl     \reg, 16
++	andi    \reg, 0x3
++	.endm
++#else
++	.macro  read_cpu_id reg
++	mfc0    \reg, CP0_EBASE
++	and     \reg, \reg, EBASE_CPUNUM
++       .endm
++#endif
++
+ 	.set noreorder
+ 
+ 	.macro init_wr sel
+@@ -147,12 +161,17 @@ reset:
+ 	and	t0, t0, EBASE_CPUNUM
+ #endif
+ 
++#ifndef CONFIG_SOC_CPU_RLX
++1:      read_cpu_id t0
+ 	/* Hang if this isn't the first CPU in the system */
+ 2:	beqz	t0, 4f
+ 	 nop
++
+ 3:	wait
++
+ 	b	3b
+ 	 nop
++#endif
+ 
+ 	/* Init CP0 Status */
+ 4:	mfc0	t0, CP0_STATUS
+@@ -160,6 +179,7 @@ reset:
+ 	or	t0, ST0_BEV | ST0_ERL | STATUS_SET
+ 	mtc0	t0, CP0_STATUS
+ 
++#ifndef CONFIG_SOC_CPU_RLX
+ 	/*
+ 	 * Check whether CP0 Config1 is implemented. If not continue
+ 	 * with legacy Watch register initialization.
+@@ -189,6 +209,7 @@ reset:
+ 	init_wr	7
+ 	b	wr_done
+ 	 nop
++#endif
+ 
+ wr_legacy:
+ 	MTC0	zero, CP0_WATCHLO
+diff --git a/arch/mips/dts/Makefile b/arch/mips/dts/Makefile
+index c9d75596f2..3d123e5187 100644
+--- a/arch/mips/dts/Makefile
++++ b/arch/mips/dts/Makefile
+@@ -10,6 +10,7 @@ dtb-$(CONFIG_TARGET_BOSTON) += img,boston.dtb
+ dtb-$(CONFIG_TARGET_MALTA) += mti,malta.dtb
+ dtb-$(CONFIG_TARGET_PIC32MZDASK) += pic32mzda_sk.dtb
+ dtb-$(CONFIG_TARGET_XILFPGA) += nexys4ddr.dtb
++dtb-$(CONFIG_TARGET_SATURN2) += ca-saturn2-engboard.dtb
+ dtb-$(CONFIG_BOARD_BROADCOM_BCM968380GERG) += brcm,bcm968380gerg.dtb
+ dtb-$(CONFIG_BOARD_COMTREND_AR5315U) += comtrend,ar-5315u.dtb
+ dtb-$(CONFIG_BOARD_COMTREND_AR5387UN) += comtrend,ar-5387un.dtb
+diff --git a/arch/mips/dts/ca-saturn2-engboard.dts b/arch/mips/dts/ca-saturn2-engboard.dts
+new file mode 100644
+index 0000000000..8e10f8255e
+--- /dev/null
++++ b/arch/mips/dts/ca-saturn2-engboard.dts
+@@ -0,0 +1,25 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) 2020, Cortina Access Inc.
++ */
++
++/dts-v1/;
++
++/ {
++   #address-cells = <2>;
++   #size-cells = <1>;
++
++	watchdog: watchdog@0xb222401c {
++		compatible = "cortina,ca-wdt";
++		reg = <0x0 0xb222401c 0x30>,
++		      <0x0 0xbc100048 0x04>;
++		status = "okay";
++	};
++
++	uart0: serial@0xb2224148  {
++		u-boot,dm-pre-reloc;
++		compatible = "cortina,ca-uart";
++		reg = <0x0 0xb2224148 0x30>;
++		status = "okay";
++	};
++};
+diff --git a/arch/mips/include/asm/system.h b/arch/mips/include/asm/system.h
+index 79e638844b..0e8ce0eafc 100644
+--- a/arch/mips/include/asm/system.h
++++ b/arch/mips/include/asm/system.h
+@@ -277,7 +277,7 @@ static inline void instruction_hazard_barrier(void)
+ 
+ 	asm volatile(
+ 	__stringify(PTR_LA) "\t%0, 1f\n"
+-	"	jr.hb	%0\n"
++	"       jr      %0\n"
+ 	"1:	.insn"
+ 	: "=&r"(tmp));
+ }
+diff --git a/arch/mips/lib/cache_init.S b/arch/mips/lib/cache_init.S
+index cfad1d9c8a..5b0494dab0 100644
+--- a/arch/mips/lib/cache_init.S
++++ b/arch/mips/lib/cache_init.S
+@@ -328,7 +328,7 @@ l1_init:
+ 	PTR_LI		t1, CKSEG1
+ 	or		t0, t0, t1
+ 	li		a0, CONF_CM_CACHABLE_NONCOHERENT
+-	jalr.hb		t0
++	//jalr.hb		t0
+ 
+ 	/*
+ 	 * then initialize D-cache.
+@@ -425,5 +425,5 @@ LEAF(change_k0_cca)
+ #endif
+ 	mtc0		a0, CP0_CONFIG
+ 
+-	jr.hb		ra
++//	jr.hb		ra
+ 	END(change_k0_cca)
+diff --git a/board/cortina/saturn2/Kconfig b/board/cortina/saturn2/Kconfig
+new file mode 100644
+index 0000000000..109e4289c2
+--- /dev/null
++++ b/board/cortina/saturn2/Kconfig
+@@ -0,0 +1,25 @@
++if TARGET_SATURN2
++
++config SYS_BOARD
++	default "saturn2"
++
++config SYS_VENDOR
++	default "cortina"
++
++config SYS_CONFIG_NAME
++	default "saturn2"
++
++config SYS_DCACHE_SIZE
++	default 32768
++
++config SYS_DCACHE_LINE_SIZE
++	default 32
++
++config SYS_ICACHE_SIZE
++	default 65536
++
++config SYS_ICACHE_LINE_SIZE
++	default 32
++
++source "board/cortina/common/Kconfig"
++endif
+diff --git a/board/cortina/saturn2/Makefile b/board/cortina/saturn2/Makefile
+new file mode 100644
+index 0000000000..28607cff6a
+--- /dev/null
++++ b/board/cortina/saturn2/Makefile
+@@ -0,0 +1,7 @@
++# SPDX-License-Identifier:	GPL-2.0+
++#
++# (C) Copyright 2020 Cortina-Access.Inc.
++#
++#
++
++obj-y	:= saturn2.o
+diff --git a/board/cortina/saturn2/saturn2.c b/board/cortina/saturn2/saturn2.c
+new file mode 100644
+index 0000000000..34323665f6
+--- /dev/null
++++ b/board/cortina/saturn2/saturn2.c
+@@ -0,0 +1,170 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * (C) Copyright 2020 - Cortina Access Inc.
++ *
++ */
++
++#include <common.h>
++#include <configs/saturn2.h>
++#include <cpu_func.h>
++#include <asm/io.h>
++#include <wdt.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++int dram_init(void)
++{
++	unsigned int ddr_size;
++
++	ddr_size = readl((const void *)0xA111100c);
++	gd->ram_size = ddr_size * 0x100000;
++	return 0;
++}
++
++int board_early_init_r(void)
++{
++	dcache_disable();
++	return 0;
++}
++
++#define CYGARC_KSEG_UNCACHED_BASE (0xa0000000)
++#define HAL_DCACHE_SIZE           (0x4000)
++
++#ifdef CONFIG_CPU_HAS_SYNC
++#define __sync()                                \
++	__asm__ __volatile__(                   \
++		".set   push\n\t"               \
++		".set   noreorder\n\t"          \
++		"sync\n\t"                      \
++		".set   pop"                    \
++		: /* no output */               \
++		: /* no input */                \
++		: "memory")
++#else
++#define __sync()        do { } while (0)
++#endif
++
++void rlx_flush_write_buffer(void)
++{
++	__sync();
++	/* read a uncacheable address to cause write buffer to be flushed */
++	/*CYGARC_KSEG_UNCACHED_BASE or 0xbfc00000*/
++	__asm__ __volatile__( ".set\tpush\n"
++			      ".set\tnoreorder\n"
++			      "\tlw\t$0, %0\n"
++			      "\tnop\n"
++			      ".set\tpop\n"
++			      : /* no output */
++			      : "m" (*(int *)CYGARC_KSEG_UNCACHED_BASE)
++			      : "memory");
++}
++
++void dcache_flush_all(void)
++{
++	__asm__ __volatile__( ".set\tpush\n"
++			      ".set\tnoreorder\n"
++			      "\tmfc0\t$8, $20\n"
++			      "\tori \t$8, 0x200\n"
++			      "\txori\t$9, $8, 0x200\n"
++			      "\tmtc0\t$9, $20\n"
++			      "\tmtc0\t$8, $20\n"
++			      ".set\tpop\n");
++
++	rlx_flush_write_buffer();
++}
++
++void flush_dcache_range(ulong start_addr, ulong stop)
++{
++	unsigned long size, i;
++
++	volatile unsigned char *p;
++	unsigned long flush_ualign = (start_addr % 16);
++
++	if (flush_ualign)
++		start_addr = start_addr - flush_ualign;
++	size = stop - start_addr;
++
++	if (size >= (HAL_DCACHE_SIZE * 2)) {
++		dcache_flush_all();
++		return;
++	}
++	p = (unsigned char *)start_addr;
++
++	//HAL_DISABLE_INTERRUPTS(_old);
++
++	/* 0x11 = Inval   */
++	/* 0x15 = WBInval */
++	/* 0x19 = WB      */
++
++	for (i = 0; i < size; i += 0x080) {
++		asm ("cache 0x15, 0x000(%0)\n\t"
++		     "cache 0x15, 0x020(%0)\n\t"
++		     "cache 0x15, 0x040(%0)\n\t"
++		     "cache 0x15, 0x060(%0)\n\t"
++		     : : "r" (p));
++		p += 0x080;
++	}
++
++	rlx_flush_write_buffer();
++}
++
++#define GLOBAL_STRAP               (0xbc100034)
++#define CLKGEN_TAROKO_AP_FREQ_CONF (0xbc109028)
++#define CPU_AP_SPEED_CHANGE_ENABLE BIT(30)
++#define STRAP_SPEED                (3UL << 2)
++#define CPU_AP_NEW_DIVSEL          (0x7F)
++
++ulong notrace get_tbclk(void)
++{
++	long strap, freq, speed, val;
++
++	strap = readl((const void *)GLOBAL_STRAP);
++	freq = readl((const void *)CLKGEN_TAROKO_AP_FREQ_CONF);
++
++	speed = strap & (STRAP_SPEED);
++
++#define MHZ     (1000000)
++	if (freq & CPU_AP_SPEED_CHANGE_ENABLE) {
++		val = freq & (CPU_AP_NEW_DIVSEL);
++		/* use AP_FREQ_CONF to get CPU clock */
++		if (speed == 0)
++			return (2 * (2000 * MHZ / val));
++		else
++			return (2 * (1000 * MHZ / val));
++	}
++
++	switch (speed) {
++	case 0:
++		return 666666667;
++	case 1:
++		return 500 * 1000000;
++	case 2:
++	case 3:
++		return 200 * 1000000;
++	}
++
++	/* Structure error if we got here!! */
++	return 666666667;
++}
++
++#define GLOBAL_GLOBAL_CONFIG (0xbc100050)
++
++void _machine_restart(void)
++{
++	int ret;
++	struct udevice *dev;
++
++	writel(0x3d0, (void *)GLOBAL_GLOBAL_CONFIG);
++
++	ret = uclass_first_device_err(UCLASS_WDT, &dev);
++	if (ret) {
++		printf("Can't get the watchdog timer:\n");
++		return;
++	}
++
++	wdt_start(dev, 1, 0);
++
++	/* NOP */
++	while (1)
++		NULL;
++}
+diff --git a/configs/cortina_saturn2-base_defconfig b/configs/cortina_saturn2-base_defconfig
+new file mode 100644
+index 0000000000..c03c1defb4
+--- /dev/null
++++ b/configs/cortina_saturn2-base_defconfig
+@@ -0,0 +1,29 @@
++CONFIG_MIPS=y
++CONFIG_SYS_ARCH="mips"
++CONFIG_TARGET_SATURN2=y
++CONFIG_SYS_TEXT_BASE=0x84000000
++CONFIG_SYS_DCACHE_SIZE=32768
++CONFIG_SYS_DCACHE_LINE_SIZE=32
++CONFIG_SYS_ICACHE_SIZE=65536
++CONFIG_SYS_ICACHE_LINE_SIZE=32
++
++CONFIG_ENV_SIZE=0x20000
++CONFIG_NR_DRAM_BANKS=1
++CONFIG_IDENT_STRING="Saturn-SoC"
++CONFIG_SHOW_BOOT_PROGRESS=y
++CONFIG_BOOTDELAY=3
++CONFIG_BOARD_EARLY_INIT_R=y
++CONFIG_SYS_PROMPT="SATURN2#"
++CONFIG_CMD_WDT=y
++CONFIG_CMD_TIMER=y
++CONFIG_OF_CONTROL=y
++CONFIG_OF_LIVE=y
++CONFIG_DEFAULT_DEVICE_TREE="ca-saturn2-engboard"
++# CONFIG_NET is not set
++CONFIG_DM=y
++# CONFIG_MMC is not set
++CONFIG_DM_SERIAL=y
++CONFIG_CORTINA_UART=y
++CONFIG_WDT=y
++CONFIG_WDT_CORTINA=y
++CONFIG_MIPS_CACHE_INDEX_BASE=0
+diff --git a/drivers/watchdog/cortina_wdt.c b/drivers/watchdog/cortina_wdt.c
+index 7ab9d7b2db..f05af8b713 100644
+--- a/drivers/watchdog/cortina_wdt.c
++++ b/drivers/watchdog/cortina_wdt.c
+@@ -136,4 +136,5 @@ U_BOOT_DRIVER(cortina_wdt) = {
+ 	.probe = cortina_wdt_probe,
+ 	.of_match = cortina_wdt_ids,
+ 	.ops = &cortina_wdt_ops,
++	.priv_auto_alloc_size = sizeof(struct ca_wdt_priv),
+ };
+diff --git a/include/configs/saturn2.h b/include/configs/saturn2.h
+new file mode 100644
+index 0000000000..e77d901d6b
+--- /dev/null
++++ b/include/configs/saturn2.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright (C) 2020 Cortina Access Inc.
++ *
++ * Configuration for Cortina-Access Venus board.
++ */
++
++#ifndef __SATURN2_H
++#define __SATURN2_H
++
++
++#define CONFIG_SYS_MIPS_TIMER_FREQ      (666666667)
++
++#define CONFIG_SYS_MALLOC_LEN           (0x1000000)
++#define CONFIG_SYS_SDRAM_BASE           (0x80000000)
++#define CONFIG_SYS_LOAD_ADDR            (0x80000000)
++
++#define CONFIG_SYS_INIT_SP_OFFSET       (0x00100000)
++#define CONFIG_SYS_INIT_SP_ADDR         (0x80200000)
++
++#define CORTINA_PER_IO_FREQ             (125 * 1000000)
++#define CORTINA_UART_CLOCK              (125 * 1000000)
++
++#define CONFIG_SYS_MONITOR_BASE         CONFIG_SYS_TEXT_BASE
++#define CONFIG_SKIP_LOWLEVEL_INIT       1
++
++#endif
+-- 
+2.20.1
+

@@ -1,282 +1,106 @@
-From 07aaba54b5a18ec3e0a08a9fe58bccf9932ceb4c Mon Sep 17 00:00:00 2001
+From f84282836d3afa92a27e1f89480dc5d77d08cbb2 Mon Sep 17 00:00:00 2001
 From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
 Date: Thu, 13 Aug 2020 12:54:19 +0800
 Subject: [PATCH 1/3] Fixed bug on serial flash controller driver
 
-* Updated serial flash controller source codes
-* Enabled GLOBAL_PIN_MUX bitfield for sflash Multi-IO mode
-* Updated configs file for spi-nand and spi-nor device
+Updated serial flash controller source codes
 
 Type:fix
 Scope:saturn2-sfu
 Bug:N/A
-Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
 ---
- arch/mips/dts/ca-saturn-engboard.dts            |   4 +-
- board/cortina/saturn2/saturn2.c                 | 116 +++-
- configs/cortina_saturn2-engboard-nand_defconfig |   2 +-
- configs/cortina_saturn2-engboard-nor_defconfig  |   4 +-
- drivers/spi/Kconfig                             |   2 +-
- drivers/spi/Makefile                            |   2 +-
- drivers/spi/ca_sflash.c                         | 712 ++++++++++--------------
- 7 files changed, 407 insertions(+), 435 deletions(-)
+ MAINTAINERS             |   2 +
+ drivers/spi/Kconfig     |   8 +
+ drivers/spi/Makefile    |   1 +
+ drivers/spi/ca_sflash.c | 452 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 463 insertions(+)
+ create mode 100644 drivers/spi/ca_sflash.c
 
-diff --git a/arch/mips/dts/ca-saturn-engboard.dts b/arch/mips/dts/ca-saturn-engboard.dts
-index 99d2312..9027b50 100644
---- a/arch/mips/dts/ca-saturn-engboard.dts
-+++ b/arch/mips/dts/ca-saturn-engboard.dts
-@@ -32,8 +32,8 @@
+diff --git a/MAINTAINERS b/MAINTAINERS
+index cc56ade..483fa61 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -183,6 +183,7 @@ F:	drivers/serial/serial_cortina.c
+ F:	drivers/mmc/ca_dw_mmc.c
+ F:	drivers/i2c/i2c-cortina.c
+ F:	drivers/i2c/i2c-cortina.h
++F:	drivers/spi/ca_sflash.c
  
- 		flash@0 {
- 			compatible = "spi-nand", "jedec,spi-nor";
--			spi-rx-bus-width = <4>;
--			spi-tx-bus-width = <4>;
-+			spi-rx-bus-width = <4>; /* 1:SINGLE, 2:DUAL or 4:QUAD */
-+			spi-tx-bus-width = <4>; /* 1:SINGLE or 4:QUAD */
- 			reg = <0>;
- 		};
- 	};
-diff --git a/board/cortina/saturn2/saturn2.c b/board/cortina/saturn2/saturn2.c
-index 60868d4..e7b8e27 100644
---- a/board/cortina/saturn2/saturn2.c
-+++ b/board/cortina/saturn2/saturn2.c
-@@ -20,18 +20,97 @@ int dram_init(void)
- 	return 0;
- }
+ ARM/CZ.NIC TURRIS MOX SUPPORT
+ M:	Marek Behun <marek.behun@nic.cz>
+@@ -698,6 +699,7 @@ F:	drivers/serial/serial_cortina.c
+ F:	drivers/mmc/ca_dw_mmc.c
+ F:	drivers/i2c/i2c-cortina.c
+ F:	drivers/i2c/i2c-cortina.h
++F:	drivers/spi/ca_sflash.c
  
--#if defined(CONFIG_CORTINA_SFLASH)
--static int init_sflash(void)
-+#ifdef CONFIG_CORTINA_QSPI
-+#define GLOBAL_PIN_MUX             (0xbc100058)
-+typedef volatile union {
-+	struct {
-+		uint32_t rsrvd1               :  2 ;
-+		uint32_t flash_mux_sel        :  1 ; /* bits 2:2 */
-+		uint32_t iomux_uart_1_enable  :  1 ; /* bits 3:3 */
-+		uint32_t iomux_led_enable     :  1 ; /* bits 4:4 */
-+		uint32_t iomux_pwm_enable     :  1 ; /* bits 5:5 */
-+		uint32_t iomux_spi_cs1_en     :  1 ; /* bits 6:6 */
-+		uint32_t iomux_uart_0_hwfc_enable :  1 ; /* bits 7:7 */
-+		uint32_t iomux_rtk_biws_enable :  1 ; /* bits 8:8 */
-+		uint32_t rsrvd2               :  2 ;
-+		uint32_t iomux_sd_volt_reg    :  1 ; /* bits 11:11 */
-+		uint32_t iomux_g3_comm        :  1 ; /* bits 12:12 */
-+		uint32_t iomux_sd_mmc_resetn  :  1 ; /* bits 13:13 */
-+		uint32_t iomux_optical_pwdn_enable :  1 ; /* bits 14:14 */
-+		uint32_t iomux_frac_clk_en_extsclk :  1 ; /* bits 15:15 */
-+		uint32_t iomux_frac_clk_en_extclk :  1 ; /* bits 16:16 */
-+		uint32_t iomux_tdm_wan_clk    :  1 ; /* bits 17:17 */
-+		uint32_t iomux_tdm_wan_clk_sel :  1 ; /* bits 18:18 */
-+		uint32_t iomux_eaxi_enable    :  1 ; /* bits 19:19 */
-+		uint32_t rsrvd3               :  1 ;
-+		uint32_t iomux_use_cspi       :  1 ; /* bits 21:21 */
-+		uint32_t iomux_sflash_cs1_en  :  1 ; /* bits 22:22 */
-+		uint32_t iomux_intout_enable  :  1 ; /* bits 23:23 */
-+		uint32_t iomux_sflash4_enable :  1 ; /* bits 24:24 */
-+		uint32_t iomux_pado_spare_1   :  1 ; /* bits 25:25 */
-+		uint32_t iomux_pade_spare_1   :  1 ; /* bits 26:26 */
-+		uint32_t iomux_psds_spare_1   :  1 ; /* bits 27:27 */
-+		uint32_t rsrvd4               :  3 ;
-+		uint32_t fmro_enable          :  1 ; /* bits 31:31 */
-+	} bf ;
-+	uint32_t wrd ;
-+} GLOBAL_PIN_MUX_t;
-+
-+static int iomux_sflash4_enable(void)
-+{
-+	GLOBAL_PIN_MUX_t pin_mux;
-+
-+	pin_mux.wrd = readl(GLOBAL_PIN_MUX);
-+	pin_mux.bf.iomux_sflash4_enable = 1;
-+	writel(pin_mux.wrd, GLOBAL_PIN_MUX);
-+
-+	return 0;
-+}
-+
-+static int init_qspi(void)
- {
--        struct udevice *dev;
--        int ret;
--
--        ret = uclass_first_device_err(UCLASS_SPI, &dev);
--        if (ret && ret != -ENODEV) {
--                printf("sflash device found err! %d\n", ret);
--                return -1;
--        }
--        return 0;
-+	struct udevice *dev;
-+	int ret;
-+
-+	ret = uclass_first_device_err(UCLASS_SPI, &dev);
-+	if (ret && ret != -ENODEV) {
-+		printf("sflash-ctrl found err! %d\n", ret);
-+		return -1;
-+	}
-+
-+	return 0;
-+}
-+#endif
-+
-+#ifdef CONFIG_MTD_SPI_NAND
-+static int init_spinand(void)
-+{
-+	struct udevice *dev;
-+	int ret;
-+
-+	ret = uclass_first_device_err(UCLASS_MTD, &dev);
-+	if (ret && ret != -ENODEV) {
-+		printf("spi-nand device found err! %d\n", ret);
-+		return -1;
-+	}
-+
-+	return 0;
-+}
-+#endif
-+
-+#ifdef CONFIG_SPI_FLASH
-+static int init_spinor(void)
-+{
-+	struct udevice *dev;
-+	int ret;
-+
-+	ret = uclass_first_device_err(UCLASS_SPI_FLASH, &dev);
-+	if (ret && ret != -ENODEV) {
-+		printf("spi-nor device found err! %d\n", ret);
-+		return -1;
-+	}
-+
-+	return 0;
- }
- #endif
- 
-@@ -54,9 +133,20 @@ int board_eth_init(bd_t *bis)
- int board_early_init_r(void)
- {
- 	dcache_disable();
--#ifdef CONFIG_CORTINA_SFLASH
--        init_sflash();
-+
-+#ifdef CONFIG_CORTINA_QSPI
-+	iomux_sflash4_enable();
-+	init_qspi();
- #endif
-+
-+#ifdef CONFIG_MTD_SPI_NAND
-+	init_spinand();
-+#endif
-+
-+#ifdef CONFIG_SPI_FLASH
-+	init_spinor();
-+#endif
-+
- 	return 0;
- }
- 
-diff --git a/configs/cortina_saturn2-engboard-nand_defconfig b/configs/cortina_saturn2-engboard-nand_defconfig
-index b81a92d..cc4a8c7 100644
---- a/configs/cortina_saturn2-engboard-nand_defconfig
-+++ b/configs/cortina_saturn2-engboard-nand_defconfig
-@@ -36,7 +36,7 @@ CONFIG_SPI=y
- CONFIG_SPI_MEM=y
- CONFIG_DM_SPI_FLASH=y
- CONFIG_SPI_FLASH=y
--CONFIG_CORTINA_SFLASH=y
-+CONFIG_CORTINA_QSPI=y
- CONFIG_CMD_SPI=y
- CONFIG_CMD_SF=y
- CONFIG_CMD_SF_TEST=y
-diff --git a/configs/cortina_saturn2-engboard-nor_defconfig b/configs/cortina_saturn2-engboard-nor_defconfig
-index 0ab30f7..3d93631 100644
---- a/configs/cortina_saturn2-engboard-nor_defconfig
-+++ b/configs/cortina_saturn2-engboard-nor_defconfig
-@@ -33,11 +33,12 @@ CONFIG_MIPS_CACHE_INDEX_BASE=0
- # SPI-NOR Flash Support
- CONFIG_DM_SPI=y
- CONFIG_DM_SPI_FLASH=y
--CONFIG_CORTINA_SFLASH=y
-+CONFIG_CORTINA_QSPI=y
- 
- CONFIG_SPI=y
- CONFIG_SPI_MEM=y
- CONFIG_SPI_FLASH=y
-+CONFIG_SPI_FLASH_SFDP_SUPPORT=y
- CONFIG_SPI_FLASH_ATMEL=y
- CONFIG_SPI_FLASH_EON=y
- CONFIG_SPI_FLASH_GIGADEVICE=y
-@@ -50,6 +51,7 @@ CONFIG_SPI_FLASH_STMICRO=y
- CONFIG_SPI_FLASH_WINBOND=y
- CONFIG_SPI_FLASH_XMC=y
- CONFIG_CMD_SF=y
-+CONFIG_CMD_SF_TEST=y
- CONFIG_CMD_SPI=y
- CONFIG_CMD_FLASH=y
- 
+ MIPS MSCC
+ M:	Gregory CLEMENT <gregory.clement@bootlin.com>
 diff --git a/drivers/spi/Kconfig b/drivers/spi/Kconfig
-index 8a244f1..a59b9d9 100644
+index 4166c61..a59b9d9 100644
 --- a/drivers/spi/Kconfig
 +++ b/drivers/spi/Kconfig
-@@ -106,7 +106,7 @@ config BCMSTB_SPI
+@@ -106,6 +106,14 @@ config BCMSTB_SPI
  	  be used to access the SPI flash on platforms embedding this
  	  Broadcom SPI core.
  
--config CORTINA_SFLASH
 +config CORTINA_QSPI
- 	bool "Cortina-Access Serial Flash controller driver"
- 	depends on DM_SPI && SPI_MEM
++	bool "Cortina-Access Serial Flash controller driver"
++	depends on DM_SPI && SPI_MEM
++	help
++	  Enable the Cortina-Access Serial Flash controller driver. This driver
++	  can be used to access the SPI NOR/NAND flash on platforms embedding this
++	  Cortina-Access IP core.
++
+ config CADENCE_QSPI
+ 	bool "Cadence QSPI driver"
  	help
 diff --git a/drivers/spi/Makefile b/drivers/spi/Makefile
-index 32b98b4..a787f1f 100644
+index 52462e1..a787f1f 100644
 --- a/drivers/spi/Makefile
 +++ b/drivers/spi/Makefile
-@@ -25,7 +25,7 @@ obj-$(CONFIG_BCM63XX_SPI) += bcm63xx_spi.o
+@@ -25,6 +25,7 @@ obj-$(CONFIG_BCM63XX_SPI) += bcm63xx_spi.o
  obj-$(CONFIG_BCMSTB_SPI) += bcmstb_spi.o
  obj-$(CONFIG_CADENCE_QSPI) += cadence_qspi.o cadence_qspi_apb.o
  obj-$(CONFIG_CF_SPI) += cf_spi.o
--obj-$(CONFIG_CORTINA_SFLASH) += ca_sflash.o
 +obj-$(CONFIG_CORTINA_QSPI) += ca_sflash.o
  obj-$(CONFIG_DAVINCI_SPI) += davinci_spi.o
  obj-$(CONFIG_DESIGNWARE_SPI) += designware_spi.o
  obj-$(CONFIG_EXYNOS_SPI) += exynos_spi.o
 diff --git a/drivers/spi/ca_sflash.c b/drivers/spi/ca_sflash.c
-index 61a6357..74f3fc9 100644
---- a/drivers/spi/ca_sflash.c
+new file mode 100644
+index 0000000..fdbdfc2
+--- /dev/null
 +++ b/drivers/spi/ca_sflash.c
-@@ -1,10 +1,12 @@
- // SPDX-License-Identifier: GPL-2.0+
- /*
-- * Driver for Cortina SPI-FLASH Controller
+@@ -0,0 +1,452 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
 + * Driver for Cortina QSPI Controller
-  *
-  * Copyright (C) 2020 Cortina Access Inc. All Rights Reserved.
-  *
-  * Author: PengPeng Chen <pengpeng.chen@cortina-access.com>
++ *
++ * Copyright (C) 2020 Cortina Access Inc. All Rights Reserved.
++ *
++ * Author: PengPeng Chen <pengpeng.chen@cortina-access.com>
 + * Signed-off-by: Jason Li <jason.li@cortina-access.com>
 + *
-  */
- 
- #include <common.h>
-@@ -24,512 +26,392 @@
- 
- DECLARE_GLOBAL_DATA_PTR;
- 
--struct ca_sflash_regs {
--	u32 idr;		/* 0x00:Flash word ID Register */
--	u32 tc;			/* 0x04:Flash Timeout Counter Register */
--	u32 sr;			/* 0x08:Flash Status Register */
--	u32 tr;			/* 0x0C:Flash Type Register */
--	u32 asr;		/* 0x10:Flash ACCESS START/BUSY Register */
--	u32 isr;		/* 0x14:Flash Interrupt Status Register */
--	u32 imr;		/* 0x18:Flash Interrupt Mask Register */
--	u32 fcr;		/* 0x1C:NAND Flash FIFO Control Register */
--	u32 ffsr;		/* 0x20:Flash FIFO Status Register */
--	u32 ffar;		/* 0x24:Flash FIFO ADDRESS Register */
--	u32 ffmar;		/* 0x28:Flash FIFO MATCHING ADDRESS Register */
--	u32 ffdr;		/* 0x2C:Flash FIFO Data Register */
--	u32 ar;			/* 0x30:Serial Flash Access Register */
--	u32 ear;		/* 0x34:Serial Flash Extend Access Register */
--	u32 adr;		/* 0x38:Serial Flash ADdress Register */
--	u32 dr;			/* 0x3C:Serial Flash Data Register */
--	u32 tmr;		/* 0x40:Serial Flash Timing Register */
++ */
++
++#include <common.h>
++#include <malloc.h>
++#include <clk.h>
++#include <dm.h>
++#include <errno.h>
++#include <fdtdec.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/ioport.h>
++#include <linux/sizes.h>
++#include <linux/err.h>
++#include <spi.h>
++#include <spi-mem.h>
++#include <reset.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
 +struct ca_qspi_regs {
 +	u32 idr;        /* 0x00:Flash word ID Register */
 +	u32 tc;         /* 0x04:Flash Timeout Counter Register */
@@ -295,137 +119,8 @@ index 61a6357..74f3fc9 100644
 +	u32 adr;        /* 0x38:Serial Flash ADdress Register */
 +	u32 dr;         /* 0x3C:Serial Flash Data Register */
 +	u32 tmr;        /* 0x40:Serial Flash Timing Register */
- };
- 
--/*
-- * FLASH_TYPE
-- */
--#define CA_FLASH_TR_PIN            	BIT(15)
--#define CA_FLASH_TR_TYPE_MASK      	GENMASK(14, 12)
--#define CA_FLASH_TR_TYPE(tp)		(((tp) << 12) & CA_FLASH_TR_TYPE_MASK)
--#define CA_FLASH_TR_WIDTH			BIT(11)
--#define CA_FLASH_TR_SIZE_MASK		GENMASK(10, 9)
--#define CA_FLASH_TR_SIZE(sz)		(((sz) << 9) & CA_FLASH_TR_SIZE_MASK)
--
--/*
-- * FLASH_FLASH_ACCESS_START
-- */
--#define CA_FLASH_ASR_IND_START_EN  	BIT(1)
--#define CA_FLASH_ASR_DMA_START_EN  	BIT(3)
--#define CA_FLASH_ASR_WR_ACCESS_EN	BIT(9)
--
--/*
-- * FLASH_FLASH_INTERRUPT
-- */
--#define CA_FLASH_ISR_REG_IRQ   		BIT(1)
--#define CA_FLASH_ISR_FIFO_IRQ  		BIT(2)
--
--/*
-- * FLASH_SF_ACCESS
-- */
--#define CA_SF_AR_OPCODE_MASK   		GENMASK(7, 0)
--#define CA_SF_AR_OPCODE(op)			(((op) << 0) & CA_SF_AR_OPCODE_MASK)
--#define CA_SF_AR_ACCODE_MASK   		GENMASK(11, 8)
--#define CA_SF_AR_ACCODE(ac)			(((ac) << 8) & CA_SF_AR_ACCODE_MASK)
--#define CA_SF_AR_FORCE_TERM   		BIT(12)
--#define CA_SF_AR_FORCE_BURST   		BIT(13)
--#define CA_SF_AR_AUTO_MODE_EN   	BIT(15)
--#define CA_SF_AR_CHIP_EN_ALT  		BIT(16)
--#define CA_SF_AR_HI_SPEED_RD   		BIT(17)
--#define CA_SF_AR_MIO_INF_DC   		BIT(24)
--#define CA_SF_AR_MIO_INF_AC   		BIT(25)
--#define CA_SF_AR_MIO_INF_CC   		BIT(26)
--#define CA_SF_AR_DDR_MASK   		GENMASK(29, 28)
--#define CA_SF_AR_DDR(ddr)			(((ddr) << 28) & CA_SF_AR_DDR_MASK)
--#define CA_SF_AR_MIO_INF_MASK   	GENMASK(31, 30)
--#define CA_SF_AR_MIO_INF(io)		(((io) << 30) & CA_SF_AR_MIO_INF_MASK)
--
--/*
-- * FLASH_SF_EXT_ACCESS
-- */
--#define CA_SF_EAR_OPCODE_MASK   	GENMASK(7, 0)
--#define CA_SF_EAR_OPCODE(op)		(((op) << 0) & CA_SF_EAR_OPCODE_MASK)
--#define CA_SF_EAR_DATA_CNT_MASK   	GENMASK(20, 8)
--#define CA_SF_EAR_DATA_CNT(cnt)		(((cnt) << 8) & CA_SF_EAR_DATA_CNT_MASK)
--#define CA_SF_EAR_DATA_CNT_MAX		(4096)
--#define CA_SF_EAR_ADDR_CNT_MASK   	GENMASK(23, 21)
--#define CA_SF_EAR_ADDR_CNT(cnt)		(((cnt) << 21) & CA_SF_EAR_ADDR_CNT_MASK)
--#define CA_SF_EAR_ADDR_CNT_MAX		(5)
--#define CA_SF_EAR_DUMY_CNT_MASK   	GENMASK(29, 24)
--#define CA_SF_EAR_DUMY_CNT(cnt)		(((cnt) << 24) & CA_SF_EAR_DUMY_CNT_MASK)
--#define CA_SF_EAR_DUMY_CNT_MAX		(32)
--#define CA_SF_EAR_DRD_CMD_EN		BIT(31)
--
--/*
-- * FLASH_SF_ADDRESS
-- */
--#define CA_SF_ADR_REG_MASK   		GENMASK(31, 0)
--#define CA_SF_ADR_REG(addr)			(((addr) << 0) & CA_SF_ADR_REG_MASK)
--
--/*
-- * FLASH_SF_DATA
-- */
--#define CA_SF_DR_REG_MASK   		GENMASK(31, 0)
--#define CA_SF_DR_REG(addr)			(((addr) << 0) & CA_SF_DR_REG_MASK)
--
--/*
-- * FLASH_SF_TIMING
-- */
--#define CA_SF_TMR_IDLE_MASK   		GENMASK(7, 0)
--#define CA_SF_TMR_IDLE(idle)		(((idle) << 0) & CA_SF_TMR_IDLE_MASK)
--#define CA_SF_TMR_HOLD_MASK   		GENMASK(15, 8)
--#define CA_SF_TMR_HOLD(hold)		(((hold) << 8) & CA_SF_TMR_HOLD_MASK)
--#define CA_SF_TMR_SETUP_MASK   		GENMASK(23, 16)
--#define CA_SF_TMR_SETUP(setup)		(((setup) << 16) & CA_SF_TMR_SETUP_MASK)
--#define CA_SF_TMR_CLK_MASK   		GENMASK(26, 24)
--#define CA_SF_TMR_CLK(clk)			(((clk) << 24) & CA_SF_TMR_CLK_MASK)
--
--#define CA_SFLASH_IND_WRITE			0
--#define CA_SFLASH_IND_READ			1
--#define CA_SFLASH_MEM_MAP			3
--#define CA_SFLASH_FIFO_TIMEOUT_US	30000
--#define CA_SFLASH_BUSY_TIMEOUT_US	40000
--
--#define CA_SF_AC_OPCODE                		0x00
--#define CA_SF_AC_OPCODE_1_DATA           	0x01
--#define CA_SF_AC_OPCODE_2_DATA           	0x02
--#define CA_SF_AC_OPCODE_3_DATA           	0x03
--#define CA_SF_AC_OPCODE_4_DATA           	0x04
--#define CA_SF_AC_OPCODE_3_ADDR         		0x05
--#define CA_SF_AC_OPCODE_4_ADDR         		(CA_SF_AC_OPCODE_3_ADDR)
--#define CA_SF_AC_OPCODE_3_ADDR_1_DATA    	0x06
--#define CA_SF_AC_OPCODE_4_ADDR_1_DATA    	(CA_SF_AC_OPCODE_3_ADDR_1_DATA << 2)
--#define CA_SF_AC_OPCODE_3_ADDR_2_DATA    	0x07
--#define CA_SF_AC_OPCODE_4_ADDR_2_DATA    	(CA_SF_AC_OPCODE_3_ADDR_2_DATA << 2)
--#define CA_SF_AC_OPCODE_3_ADDR_3_DATA    	0x08
--#define CA_SF_AC_OPCODE_4_ADDR_3_DATA    	(CA_SF_AC_OPCODE_3_ADDR_3_DATA << 2)
--#define CA_SF_AC_OPCODE_3_ADDR_4_DATA    	0x09
--#define CA_SF_AC_OPCODE_4_ADDR_4_DATA    	(CA_SF_AC_OPCODE_3_ADDR_4_DATA << 2)
--#define CA_SF_AC_OPCODE_3_ADDR_X_1_DATA   	0x0A
--#define CA_SF_AC_OPCODE_4_ADDR_X_1_DATA   	(CA_SF_AC_OPCODE_3_ADDR_X_1_DATA << 2)
--#define CA_SF_AC_OPCODE_3_ADDR_X_2_DATA   	0x0B
--#define CA_SF_AC_OPCODE_4_ADDR_X_2_DATA   	(CA_SF_AC_OPCODE_3_ADDR_X_2_DATA << 2)
--#define CA_SF_AC_OPCODE_3_ADDR_X_3_DATA   	0x0C
--#define CA_SF_AC_OPCODE_4_ADDR_X_3_DATA   	(CA_SF_AC_OPCODE_3_ADDR_X_3_DATA << 2)
--#define CA_SF_AC_OPCODE_3_ADDR_X_4_DATA   	0x0D
--#define CA_SF_AC_OPCODE_4_ADDR_X_4_DATA   	(CA_SF_AC_OPCODE_3_ADDR_X_4_DATA << 2)
--#define CA_SF_AC_OPCODE_3_ADDR_4X_1_DATA  	0x0E
--#define CA_SF_AC_OPCODE_4_ADDR_4X_1_DATA  	(CA_SF_AC_OPCODE_3_ADDR_4X_1_DATA << 2)
--#define CA_SF_AC_OPCODE_EXTEND				0x0F
--
--#define CA_SF_ACCESS_MIO_SINGLE		0
--#define CA_SF_ACCESS_MIO_DUAL		1
--#define CA_SF_ACCESS_MIO_QUARD		2
--
--enum access_type{
--	RD_ACCESS,
--	WR_ACCESS,
--};
--
--struct ca_sflash_priv {
--	struct ca_sflash_regs *regs;
--	u8 rx_width;
--	u8 tx_width;
++};
++
 +#define QSPI_SIZE_MASK               GENMASK(10, 9)
 +#define QSPI_SIZE(sz)                (((sz) << 9) & QSPI_SIZE_MASK)
 +#define QSPI_WIDTH                   BIT(11)
@@ -510,154 +205,65 @@ index 61a6357..74f3fc9 100644
 +
 +struct ca_qspi {
 +	struct ca_qspi_regs *regs;
- };
- 
--/*
-- * This function doesn't do anything except help with debugging
-- */
--static int ca_sflash_claim_bus(struct udevice *dev)
++};
++
 +static int ca_qspi_claim_bus(struct udevice *dev)
- {
- 	debug("%s:\n", __func__);
- 	return 0;
- }
- 
--static int ca_sflash_release_bus(struct udevice *dev)
-+static int ca_qspi_release_bus(struct udevice *dev)
- {
- 	debug("%s:\n", __func__);
- 	return 0;
- }
- 
--static int ca_sflash_set_speed(struct udevice *dev, uint speed)
-+static int ca_qspi_set_speed(struct udevice *dev, uint speed)
- {
- 	debug("%s:\n", __func__);
- 	return 0;
- }
- 
--static int ca_sflash_set_mode(struct udevice *dev, uint mode)
-+static int ca_qspi_set_mode(struct udevice *dev, uint mode)
- {
--	struct ca_sflash_priv *priv = dev_get_priv(dev);
--
--	if (mode & SPI_RX_QUAD)
--		priv->rx_width = 4;
--	else if (mode & SPI_RX_DUAL)
--		priv->rx_width = 2;
--	else
--		priv->rx_width = 1;
--
--	if (mode & SPI_TX_QUAD)
--		priv->tx_width = 4;
--	else if (mode & SPI_TX_DUAL)
--		priv->tx_width = 2;
--	else
--		priv->tx_width = 1;
--
--	debug("%s: mode=%d, rx_width=%d, tx_width=%d\n",
--		__func__, mode, priv->rx_width, priv->tx_width);
--
++{
 +	debug("%s:\n", __func__);
- 	return 0;
- }
- 
--static int _ca_sflash_wait_for_not_busy(struct ca_sflash_priv *priv)
++	return 0;
++}
++
++static int ca_qspi_release_bus(struct udevice *dev)
++{
++	debug("%s:\n", __func__);
++	return 0;
++}
++
++static int ca_qspi_set_speed(struct udevice *dev, uint speed)
++{
++	debug("%s:\n", __func__);
++	return 0;
++}
++
++static int ca_qspi_set_mode(struct udevice *dev, uint mode)
++{
++	debug("%s:\n", __func__);
++	return 0;
++}
++
 +static int ca_qspi_wait_cmd(struct ca_qspi *priv)
- {
--	u32 asr;
++{
 +	u32 asr = 0;
- 
++
 +	setbits_le32(&priv->regs->asr, QSPI_START_EN);
- 	if (readl_poll_timeout(&priv->regs->asr, asr,
--				 !(asr & CA_FLASH_ASR_IND_START_EN),
--				 CA_SFLASH_BUSY_TIMEOUT_US)) {
++	if (readl_poll_timeout(&priv->regs->asr, asr,
 +				 !(asr & QSPI_START_EN),
 +				 QSPI_BUSY_TIMEOUT_US)) {
- 		pr_err("busy timeout (stat:%#x)\n", asr);
- 		return -1;
- 	}
--
- 	return 0;
- }
- 
--static int _ca_sflash_wait_cmd(struct ca_sflash_priv *priv,
--							enum access_type type)
--{
--	if (type == WR_ACCESS) {
--		/* Enable write access and start the sflash indirect access */
--		clrsetbits_le32(&priv->regs->asr, GENMASK(31, 0),
--			CA_FLASH_ASR_WR_ACCESS_EN
--			| CA_FLASH_ASR_IND_START_EN);
--	} else if (type == RD_ACCESS) {
--		/* Start the sflash indirect access */
--		clrsetbits_le32(&priv->regs->asr, GENMASK(31, 0),
--			CA_FLASH_ASR_IND_START_EN);
--	} else {
--		printf("%s: !error access type.\n", __func__);
--		return -1;
--	}
--
--	/* Wait til the action(rd/wr) completed */
--	return _ca_sflash_wait_for_not_busy(priv);
--}
--
--static int _ca_sflash_read(struct ca_sflash_priv *priv,
--							u8 *buf, unsigned int data_len)
++		pr_err("busy timeout (stat:%#x)\n", asr);
++		return -1;
++	}
++	return 0;
++}
++
 +static int ca_qspi_rx(struct ca_qspi *priv,
-+	u8 *buf, unsigned int data_len)
- {
--	u32 reg_data;
--	int len;
++		      u8 *buf, unsigned int data_len)
++{
 +	u32 data = 0;
 +	int len = data_len;
- 
--	len = data_len;
- 	while (len >= 4) {
--		if (_ca_sflash_wait_cmd(priv, RD_ACCESS))
++
++	while (len >= 4) {
 +		if (ca_qspi_wait_cmd(priv))
- 			return -1;
--		reg_data = readl(&priv->regs->dr);
--		*buf++ = reg_data & 0xFF;
--		*buf++ = (reg_data >> 8) & 0xFF;
--		*buf++ = (reg_data >> 16) & 0xFF;
--		*buf++ = (reg_data >> 24) & 0xFF;
++			return -1;
 +		data = readl(&priv->regs->dr);
 +		*buf++ = data & 0xFF;
 +		*buf++ = (data >> 8) & 0xFF;
 +		*buf++ = (data >> 16) & 0xFF;
 +		*buf++ = (data >> 24) & 0xFF;
- 		len -= 4;
--		debug("%s: reg_data=%#08x\n",
--			__func__, reg_data);
- 	}
--
- 	if (len > 0) {
--		if (_ca_sflash_wait_cmd(priv, RD_ACCESS))
++		len -= 4;
++	}
++	if (len > 0) {
 +		if (ca_qspi_wait_cmd(priv))
- 			return -1;
--		reg_data = readl(&priv->regs->dr);
--		debug("%s: reg_data=%#08x\n",
--			__func__, reg_data);
--	}
--
--	switch (len) {
--	case 3:
--		*buf++ = reg_data & 0xFF;
--		*buf++ = (reg_data >> 8) & 0xFF;
--		*buf++ = (reg_data >> 16) & 0xFF;
--		break;
--	case 2:
--		*buf++ = reg_data & 0xFF;
--		*buf++ = (reg_data >> 8) & 0xFF;
--		break;
--	case 1:
--		*buf++ = reg_data & 0xFF;
--		break;
--	case 0:
--		break;
--	default:
--		printf("%s: error data_length %d!\n", __func__, len);
++			return -1;
 +		data = readl(&priv->regs->dr);
 +		*buf++ = data & 0xFF;
 +		switch (len) {
@@ -674,70 +280,25 @@ index 61a6357..74f3fc9 100644
 +			printf("%s: err datalen=%d!\n", __func__, len);
 +			return -1;
 +		}
- 	}
--
- 	return 0;
- }
- 
--static int _ca_sflash_mio_set(struct ca_sflash_priv *priv,
--							u8 width)
++	}
++	return 0;
++}
++
 +static int ca_qspi_tx(struct ca_qspi *priv,
-+	u8 *buf, unsigned int data_len)
- {
--	if (width == 4) {
--		setbits_le32(&priv->regs->ar,
--			CA_SF_AR_MIO_INF_DC
--			| CA_SF_AR_MIO_INF(CA_SF_ACCESS_MIO_QUARD)
--			| CA_SF_AR_FORCE_BURST);
--	} else if (width == 2) {
--		setbits_le32(&priv->regs->ar,
--			CA_SF_AR_MIO_INF_DC
--			| CA_SF_AR_MIO_INF(CA_SF_ACCESS_MIO_DUAL)
--			| CA_SF_AR_FORCE_BURST);
--	} else if (width == 1) {
--		setbits_le32(&priv->regs->ar,
--			CA_SF_AR_MIO_INF(CA_SF_ACCESS_MIO_SINGLE)
--			| CA_SF_AR_FORCE_BURST);
--	} else {
--		printf("%s: error rx/tx width  %d!\n", __func__, width);
--		return -1;
--	}
++		      u8 *buf, unsigned int data_len)
++{
 +	u32 data = 0;
 +	int len = data_len;
- 
--	return 0;
--}
--
--static int _ca_sflash_write(struct ca_sflash_priv *priv,
--							u8 *buf, unsigned int data_len)
--{
--	u32 reg_data;
--	int len;
--
--	len = data_len;
--	while (len > 0) {
--		reg_data = buf[0]
--			| (buf[1] << 8)
--			| (buf[2] << 16)
--			| (buf[3] << 24);
--
--		debug("%s: reg_data=%#08x\n",
--			__func__, reg_data);
--		/* Fill data */
--		clrsetbits_le32(&priv->regs->dr, GENMASK(31, 0), reg_data);
--
--		if (_ca_sflash_wait_cmd(priv, WR_ACCESS))
++
 +	while (len >= 4) {
 +		data = *buf | (*(buf + 1) << 8)
 +			| (*(buf + 2) << 16) | (*(buf + 3) << 24);
 +		writel(data, &priv->regs->dr);
 +		if (ca_qspi_wait_cmd(priv))
- 			return -1;
--
- 		len -= 4;
- 		buf += 4;
- 	}
--
++			return -1;
++		len -= 4;
++		buf += 4;
++	}
 +	if (len > 0) {
 +		data = *buf;
 +		switch (len) {
@@ -757,21 +318,13 @@ index 61a6357..74f3fc9 100644
 +		if (ca_qspi_wait_cmd(priv))
 +			return -1;
 +	}
- 	return 0;
- }
- 
--static int _ca_sflash_access_data(struct ca_sflash_priv *priv,
--							struct spi_mem_op *op)
++	return 0;
++}
++
 +static int ca_qspi_xfer_data(struct ca_qspi *priv,
-+	struct spi_mem_op *op)
- {
--	int total_cnt;
--	unsigned int len;
--	unsigned int data_cnt = op->data.nbytes;
--	u64 addr_offset = op->addr.val;
--	u8 addr_cnt = op->addr.nbytes;
--	u8 *data_buf = NULL;
- 	u8 *buf = NULL;
++			     struct spi_mem_op *op)
++{
++	u8 *buf = NULL;
 +	u8 *data_buf = NULL;
 +	unsigned int len = 0;
 +	u8 addr_cnt = op->addr.nbytes;
@@ -779,87 +332,59 @@ index 61a6357..74f3fc9 100644
 +	u32 addr_offset = (u32)op->addr.val;
 +	unsigned int buf_len  = data_cnt > QSPI_EXT_DATA_CNT_MAX ?
 +		QSPI_EXT_DATA_CNT_MAX : data_cnt;
- 
--	if (op->data.dir == SPI_MEM_DATA_IN)
++
 +	if (op->data.dir == SPI_MEM_DATA_IN) {
 +		clrbits_le32(&priv->regs->asr, QSPI_WR_ACCESS_EN);
- 		data_buf = (u8 *)op->data.buf.in;
--	else
++		data_buf = (u8 *)op->data.buf.in;
 +	} else {
 +		setbits_le32(&priv->regs->asr, QSPI_WR_ACCESS_EN);
- 		data_buf = (u8 *)op->data.buf.out;
--
--	if (data_cnt > CA_SF_EAR_DATA_CNT_MAX)
--		buf = malloc(CA_SF_EAR_DATA_CNT_MAX);
--	else
--		buf = malloc(data_cnt);
--
--	total_cnt = data_cnt;
--	while (total_cnt > 0) {
--		/* Fill address */
++		data_buf = (u8 *)op->data.buf.out;
 +	}
 +	buf = malloc(buf_len);
 +	while (data_cnt > 0) {
 +		len = data_cnt > QSPI_EXT_DATA_CNT_MAX ?
 +			QSPI_EXT_DATA_CNT_MAX : data_cnt;
- 		if (addr_cnt > 0)
--			clrsetbits_le32(&priv->regs->adr,
--				GENMASK(31, 0), (u32)addr_offset);
--
--		if (total_cnt > CA_SF_EAR_DATA_CNT_MAX) {
--			len = CA_SF_EAR_DATA_CNT_MAX;
--			addr_offset += CA_SF_EAR_DATA_CNT_MAX;
--			/* Clear start bit before next bulk read */
--			clrbits_le32(&priv->regs->asr, GENMASK(31, 0));
--		} else {
--			len = total_cnt;
--		}
--
++		if (addr_cnt > 0)
 +			writel(addr_offset, &priv->regs->adr);
- 		memset(buf, 0, len);
- 		if (op->data.dir == SPI_MEM_DATA_IN) {
--			if (_ca_sflash_read(priv, buf, len))
++		memset(buf, 0, len);
++		if (op->data.dir == SPI_MEM_DATA_IN) {
 +			if (ca_qspi_rx(priv, buf, len))
- 				break;
- 			memcpy(data_buf, buf, len);
- 		} else {
- 			memcpy(buf, data_buf, len);
--			if (_ca_sflash_write(priv, buf, len))
++				break;
++			memcpy(data_buf, buf, len);
++		} else {
++			memcpy(buf, data_buf, len);
 +			if (ca_qspi_tx(priv, buf, len))
- 				break;
- 		}
--
--		total_cnt -= len;
++				break;
++		}
 +		data_cnt -= len;
- 		data_buf += len;
++		data_buf += len;
 +		addr_offset += data_cnt > 0 ? len : 0;
- 	}
- 	if(buf)
- 		free(buf);
++	}
++	if (buf)
++		free(buf);
 +	return data_cnt > 0 ? -1 : 0;
 +}
- 
--	return total_cnt > 0 ? -1 : 0;
++
 +static int ca_qspi_buswidth_set(struct ca_qspi *priv,
-+	struct spi_mem_op *op)
++				struct spi_mem_op *op)
 +{
 +	clrbits_le32(&priv->regs->ar,
-+		QSPI_MIO_INF_MASK | QSPI_MIO_INF_DC
++		     QSPI_MIO_INF_MASK | QSPI_MIO_INF_DC
 +		| QSPI_MIO_INF_AC | QSPI_MIO_INF_CC);
 +	switch (op->data.buswidth) {
 +	case 4:
 +		setbits_le32(&priv->regs->ar,
-+			QSPI_MIO_INF_DC
++			     QSPI_MIO_INF_DC
 +			| QSPI_MIO_INF(QSPI_ACCESS_MIO_QUAD));
 +		break;
 +	case 2:
 +		setbits_le32(&priv->regs->ar,
-+			QSPI_MIO_INF_DC
++			     QSPI_MIO_INF_DC
 +			| QSPI_MIO_INF(QSPI_ACCESS_MIO_DUAL));
 +		break;
 +	case 1:
 +		setbits_le32(&priv->regs->ar,
-+			QSPI_MIO_INF(QSPI_ACCESS_MIO_SINGLE));
++			     QSPI_MIO_INF(QSPI_ACCESS_MIO_SINGLE));
 +		break;
 +	default:
 +		printf("%s: err! buswidth=%d!\n", __func__, op->data.buswidth);
@@ -870,57 +395,31 @@ index 61a6357..74f3fc9 100644
 +	if (op->cmd.buswidth == 4 || op->cmd.buswidth == 2)
 +		setbits_le32(&priv->regs->ar, QSPI_MIO_INF_CC);
 +	return 0;
- }
- 
--static int _ca_sflash_issue_cmd(struct ca_sflash_priv *priv,
--					struct spi_mem_op *op, u8 opcode)
++}
++
 +static int ca_qspi_issue_cmd(struct ca_qspi *priv,
-+	struct spi_mem_op *op, u8 opcode)
- {
--	u8 dummy_cnt = op->dummy.nbytes;
- 	u8 addr_cnt = op->addr.nbytes;
--	u8 mio_width;
- 	unsigned int data_cnt = op->data.nbytes;
--	u64 addr_offset = op->addr.val;
++			     struct spi_mem_op *op, u8 opcode)
++{
++	u8 addr_cnt = op->addr.nbytes;
++	unsigned int data_cnt = op->data.nbytes;
 +	u32 addr_offset = (u32)op->addr.val;
 +	u8 dummy_cnt = op->dummy.buswidth != 0 ? ((op->dummy.nbytes * 8)
 +		/ op->dummy.buswidth) : (op->dummy.nbytes * 8);
- 
- 	/* Set the access register */
- 	clrsetbits_le32(&priv->regs->ar,
--			GENMASK(31, 0), CA_SF_AR_ACCODE(opcode));
--
--	if (opcode == CA_SF_AC_OPCODE_EXTEND) { /* read_data, wirte_data */
++
++	/* Set the access register */
++	clrsetbits_le32(&priv->regs->ar,
 +			GENMASK(31, 0), QSPI_ACCODE(opcode));
 +	if (opcode == QSPI_AC_OP_EXTEND) {
- 		if (data_cnt > 6) {
--			if (op->data.dir == SPI_MEM_DATA_IN)
--				mio_width = priv->rx_width;
--			else
--				mio_width = priv->tx_width;
--			if (_ca_sflash_mio_set(priv, mio_width))
++		if (data_cnt > 6) {
 +			if (ca_qspi_buswidth_set(priv, op))
- 				return -1;
- 		}
--		debug("%s: FLASH ACCESS reg=%#08x\n",
--			__func__, readl(&priv->regs->ar));
--
++				return -1;
++		}
 +		if (data_cnt > 4) {
 +			setbits_le32(&priv->regs->ar, QSPI_FORCE_BURST);
 +			clrbits_le32(&priv->regs->ar, QSPI_FORCE_TERM);
 +			data_cnt = 4;
 +		}
- 		/* Use command in extend_access register */
--		clrsetbits_le32(&priv->regs->ear,
--				GENMASK(31, 0), CA_SF_EAR_OPCODE(op->cmd.opcode)
--				| CA_SF_EAR_DUMY_CNT(dummy_cnt * 8 - 1)
--				| CA_SF_EAR_ADDR_CNT(addr_cnt - 1)
--				| CA_SF_EAR_DATA_CNT(4 - 1)
--				| CA_SF_EAR_DRD_CMD_EN);
--		debug("%s: FLASH EXT ACCESS reg=%#08x\n",
--			__func__, readl(&priv->regs->ear));
--
--		if (_ca_sflash_access_data(priv, op))
++		/* Use command in extend_access register */
 +		clrsetbits_le32(&priv->regs->ear, GENMASK(31, 0),
 +				QSPI_EXT_OPCODE(op->cmd.opcode)
 +				| QSPI_EXT_DUMY_CNT(dummy_cnt - 1)
@@ -928,175 +427,104 @@ index 61a6357..74f3fc9 100644
 +				| QSPI_EXT_DATA_CNT(data_cnt - 1)
 +				| QSPI_EXT_DRD_CMD_EN);
 +		if (ca_qspi_xfer_data(priv, op))
- 			return -1;
--	} else { /* reset_op, wr_enable, wr_disable */
--		setbits_le32(&priv->regs->ar, CA_SF_AR_OPCODE(op->cmd.opcode));
--		debug("%s: FLASH ACCESS reg=%#08x\n",
--			__func__, readl(&priv->regs->ar));
--
--		if (opcode == CA_SF_AC_OPCODE_4_ADDR) { /* erase_op */
--			/* Configure address length */
--			if (addr_cnt > 3)	/* 4 Bytes address */
--				setbits_le32(&priv->regs->tr, CA_FLASH_TR_SIZE(2));
--			else				/* 3 Bytes address */
--				clrbits_le32(&priv->regs->tr, CA_FLASH_TR_SIZE_MASK);
--
--			/* Fill address */
++			return -1;
 +		if (data_cnt > 4) {
 +			setbits_le32(&priv->regs->ar, QSPI_FORCE_TERM);
 +			clrbits_le32(&priv->regs->ar, QSPI_FORCE_BURST);
 +		}
 +		clrsetbits_le32(&priv->regs->ar,
-+			GENMASK(31, 0), QSPI_ACCODE(0));
++				GENMASK(31, 0), QSPI_ACCODE(0));
 +	} else {
 +		setbits_le32(&priv->regs->ar, QSPI_OPCODE(op->cmd.opcode));
 +		if (opcode == QSPI_AC_OP_4_ADDR) {
 +			clrbits_le32(&priv->regs->tr, QSPI_SIZE_MASK);
 +			if (addr_cnt > 3)/* 4 Bytes address */
 +				setbits_le32(&priv->regs->tr, QSPI_SIZE(2));
- 			if (addr_cnt > 0)
--				clrsetbits_le32(&priv->regs->adr,
--					GENMASK(31, 0), (u32)addr_offset);
++			if (addr_cnt > 0)
 +				writel(addr_offset, &priv->regs->adr);
 +			if (ca_qspi_wait_cmd(priv))
 +				return -1;
 +			udelay(10);
 +			return 0;
- 		}
--
--		if (_ca_sflash_wait_cmd(priv, RD_ACCESS))
--			return -1;
- 	}
--	/* elapse 10us before issuing any other command */
--	udelay(10);
--
++		}
++	}
 +	if (ca_qspi_wait_cmd(priv))
 +		return -1;
- 	return 0;
- }
- 
--static int ca_sflash_exec_op(struct spi_slave *slave,
--			     const struct spi_mem_op *op)
++	return 0;
++}
++
 +static int ca_qspi_exec_op(struct spi_slave *slave,
-+	const struct spi_mem_op *op)
- {
--	struct ca_sflash_priv *priv = dev_get_priv(slave->dev->parent);
--	u8 opcode;
--
--	debug("%s: cmd:%#02x addr.val:%#llx addr.len:%#x data.len:%#x data.dir:%#x\n",
--	     __func__, op->cmd.opcode, op->addr.val,
--	    op->addr.nbytes, op->data.nbytes, op->data.dir);
++			   const struct spi_mem_op *op)
++{
 +	struct ca_qspi *priv = dev_get_priv(slave->dev->parent);
 +	u8 opcode = 0;
- 
- 	if (op->data.nbytes == 0 && op->addr.nbytes == 0)
--		opcode = CA_SF_AC_OPCODE;
++
++	if (op->data.nbytes == 0 && op->addr.nbytes == 0) {
 +		opcode = QSPI_AC_OP;
- 	else if (op->data.nbytes == 0 && op->addr.nbytes > 0)
--		opcode = CA_SF_AC_OPCODE_4_ADDR;
++	} else if (op->data.nbytes == 0 && op->addr.nbytes > 0) {
 +		opcode = QSPI_AC_OP_4_ADDR;
- 	else if (op->data.nbytes > 0)
--		opcode = CA_SF_AC_OPCODE_EXTEND;
++	} else if (op->data.nbytes > 0) {
 +		opcode = QSPI_AC_OP_EXTEND;
- 	else {
--		printf("%s: can't support cmd.opcode:(%#02x) type currently!\n",
--			__func__, op->cmd.opcode);
++	} else {
 +		printf("%s: invalid opcode:(0x%02x)\n", __func__, op->cmd.opcode);
- 		return -1;
- 	}
--
--	return _ca_sflash_issue_cmd(priv, (struct spi_mem_op *)op, opcode);
++		return -1;
++	}
 +	return ca_qspi_issue_cmd(priv, (struct spi_mem_op *)op, opcode);
- }
- 
--static void ca_sflash_init(struct ca_sflash_priv *priv)
++}
++
 +static void ca_qspi_init(struct ca_qspi *priv)
- {
--	/* Set FLASH_TYPE as serial flash, value: 0x0400*/
- 	clrsetbits_le32(&priv->regs->tr,
--		GENMASK(31, 0), CA_FLASH_TR_SIZE(2));
--	debug("%s: FLASH_TYPE reg=%#x\n",
--		__func__, readl(&priv->regs->tr));
--
--	/* Minimize flash timing, value: 0x07010101 */
--	clrsetbits_le32(&priv->regs->tmr,
--		GENMASK(31, 0),
--		CA_SF_TMR_CLK(0x07)
--		| CA_SF_TMR_SETUP(0x01)
--		| CA_SF_TMR_HOLD(0x01)
--		| CA_SF_TMR_IDLE(0x01));
--	debug("%s: FLASH_TIMING reg=%#x\n",
--		__func__, readl(&priv->regs->tmr));
++{
++	clrsetbits_le32(&priv->regs->tr,
 +		GENMASK(31, 0), QSPI_SIZE(2));
 +	clrsetbits_le32(&priv->regs->tmr, GENMASK(31, 0),
-+		QSPI_TMR_CLK(0x07) | QSPI_TMR_SETUP(0x01)
++			QSPI_TMR_CLK(0x07) | QSPI_TMR_SETUP(0x01)
 +		| QSPI_TMR_HOLD(0x01) | QSPI_TMR_IDLE(0x01));
- }
- 
--static int ca_sflash_probe(struct udevice *dev)
++}
++
 +static int ca_qspi_probe(struct udevice *dev)
- {
--	struct ca_sflash_priv *priv = dev_get_priv(dev);
++{
 +	struct ca_qspi *priv = dev_get_priv(dev);
- 	struct resource res;
--	int ret;
++	struct resource res;
 +	int ret = 0;
- 
--	/* Map the registers */
- 	ret = dev_read_resource_byname(dev, "sflash-regs", &res);
- 	if (ret) {
- 		dev_err(dev, "can't get regs base addresses(ret = %d)!\n", ret);
-@@ -538,26 +420,24 @@ static int ca_sflash_probe(struct udevice *dev)
- 	priv->regs = devm_ioremap(dev, res.start, resource_size(&res));
- 	if (IS_ERR(priv->regs))
- 		return PTR_ERR(priv->regs);
--
--	ca_sflash_init(priv);
--
--	printf("SFLASH: Controller probed ready\n");
++
++	ret = dev_read_resource_byname(dev, "sflash-regs", &res);
++	if (ret) {
++		dev_err(dev, "can't get regs base addresses(ret = %d)!\n", ret);
++		return ret;
++	}
++	priv->regs = devm_ioremap(dev, res.start, resource_size(&res));
++	if (IS_ERR(priv->regs))
++		return PTR_ERR(priv->regs);
 +	ca_qspi_init(priv);
 +	printf("QSPI:  Serial Flash ctrl has probed\n");
- 	return 0;
- }
- 
--static const struct spi_controller_mem_ops ca_sflash_mem_ops = {
--	.exec_op = ca_sflash_exec_op,
++	return 0;
++}
++
 +static const struct spi_controller_mem_ops ca_qspi_mem_ops = {
 +	.exec_op = ca_qspi_exec_op,
- };
- 
--static const struct dm_spi_ops ca_sflash_ops = {
--	.claim_bus = ca_sflash_claim_bus,
--	.release_bus = ca_sflash_release_bus,
--	.set_speed = ca_sflash_set_speed,
--	.set_mode = ca_sflash_set_mode,
--	.mem_ops = &ca_sflash_mem_ops,
++};
++
 +static const struct dm_spi_ops ca_qspi_ops = {
 +	.mem_ops = &ca_qspi_mem_ops,
 +	.claim_bus = ca_qspi_claim_bus,
 +	.release_bus = ca_qspi_release_bus,
 +	.set_speed = ca_qspi_set_speed,
 +	.set_mode = ca_qspi_set_mode,
- };
- 
--static const struct udevice_id ca_sflash_ids[] = {
++};
++
 +static const struct udevice_id ca_qspi_ids[] = {
- 	{.compatible = "cortina,ca-sflash"},
- 	{}
- };
-@@ -565,8 +445,8 @@ static const struct udevice_id ca_sflash_ids[] = {
- U_BOOT_DRIVER(ca_sflash) = {
- 	.name = "ca_sflash",
- 	.id = UCLASS_SPI,
--	.of_match = ca_sflash_ids,
--	.ops = &ca_sflash_ops,
--	.priv_auto_alloc_size = sizeof(struct ca_sflash_priv),
--	.probe = ca_sflash_probe,
++	{.compatible = "cortina,ca-sflash"},
++	{}
++};
++
++U_BOOT_DRIVER(ca_sflash) = {
++	.name = "ca_sflash",
++	.id = UCLASS_SPI,
 +	.of_match = ca_qspi_ids,
 +	.ops = &ca_qspi_ops,
 +	.priv_auto_alloc_size = sizeof(struct ca_qspi),
 +	.probe = ca_qspi_probe,
- };
++};
 -- 
 1.8.3.1
 

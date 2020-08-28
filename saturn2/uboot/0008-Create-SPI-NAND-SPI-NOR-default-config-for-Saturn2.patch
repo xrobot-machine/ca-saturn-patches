@@ -1,0 +1,307 @@
+From 111b5c9353ceac0b727e275d7027384371c41fab Mon Sep 17 00:00:00 2001
+From: Lee Jenfeng <jenfeng.lee@cortina-access.com>
+Date: Thu, 20 Aug 2020 15:30:35 +0800
+Subject: [PATCH 08/15] Create SPI-NAND/SPI-NOR default config for Saturn2
+
+Those config files are based on configs/cortina-saturn2-base_defconfig.
+That's because Saturn2 Eng board is equipped with SPI-NAND flash
+majorly. But one variant is equipped with SPI-NOR flash. Two support
+different type of flash, create two specific config files
+---
+ arch/mips/dts/ca-saturn2-engboard.dts         |  15 +++
+ board/cortina/saturn2/saturn2.c               | 116 +++++++++++++++---
+ .../cortina_saturn2-engboard-nand_defconfig   |  45 +++++++
+ .../cortina_saturn2-engboard-nor_defconfig    |  55 +++++++++
+ 4 files changed, 215 insertions(+), 16 deletions(-)
+ create mode 100644 configs/cortina_saturn2-engboard-nand_defconfig
+ create mode 100644 configs/cortina_saturn2-engboard-nor_defconfig
+
+diff --git a/arch/mips/dts/ca-saturn2-engboard.dts b/arch/mips/dts/ca-saturn2-engboard.dts
+index 8e10f8255e..1e096a46ea 100644
+--- a/arch/mips/dts/ca-saturn2-engboard.dts
++++ b/arch/mips/dts/ca-saturn2-engboard.dts
+@@ -22,4 +22,19 @@
+ 		reg = <0x0 0xb2224148 0x30>;
+ 		status = "okay";
+ 	};
++
++	sflash: sflash-controller@0xb2223000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
++		compatible = "cortina,ca-sflash";
++		reg = <0x0 0xb2223000 0x50>;
++		reg-names = "sflash-regs";
++
++		flash@0 {
++			compatible = "spi-nand", "jedec,spi-nor";
++			spi-rx-bus-width = <4>; /* 1:SINGLE, 2:DUAL or 4:QUAD */
++			spi-tx-bus-width = <4>; /* 1:SINGLE or 4:QUAD */
++			reg = <0>;
++		};
++	};
+ };
+diff --git a/board/cortina/saturn2/saturn2.c b/board/cortina/saturn2/saturn2.c
+index 34323665f6..4c82572ded 100644
+--- a/board/cortina/saturn2/saturn2.c
++++ b/board/cortina/saturn2/saturn2.c
+@@ -9,6 +9,7 @@
+ #include <cpu_func.h>
+ #include <asm/io.h>
+ #include <wdt.h>
++#include <dm/uclass.h>
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -21,11 +22,94 @@ int dram_init(void)
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_CORTINA_QSPI
++#define GLOBAL_PIN_MUX             (0xbc100058)
++#define IOMUX_SFLASH4_ENABLE       BIT(24)
++
++static int iomux_sflash4_enable(void)
++{
++	long val;
++
++	val = readl((const void *)GLOBAL_PIN_MUX);
++	val |= IOMUX_SFLASH4_ENABLE;
++	writel(val, (void *)GLOBAL_PIN_MUX);
++
++	return 0;
++}
++
++static int init_qspi(void)
++{
++	struct udevice *dev;
++	int ret;
++
++	ret = uclass_first_device_err(UCLASS_SPI, &dev);
++	if (ret && ret != -ENODEV) {
++		printf("sflash-ctrl found err! %d\n", ret);
++		return -1;
++	}
++
++	return 0;
++}
++#endif
++
++#ifdef CONFIG_MTD_SPI_NAND
++static int init_spinand(void)
++{
++	struct udevice *dev;
++	int ret;
++
++	ret = uclass_first_device_err(UCLASS_MTD, &dev);
++	if (ret && ret != -ENODEV) {
++		printf("spi-nand device found err! %d\n", ret);
++		return -1;
++	}
++
++	return 0;
++}
++#endif
++
++#ifdef CONFIG_SPI_FLASH
++static int init_spinor(void)
++{
++	struct udevice *dev;
++	int ret;
++
++	ret = uclass_first_device_err(UCLASS_SPI_FLASH, &dev);
++	if (ret && ret != -ENODEV) {
++		printf("spi-nor device found err! %d\n", ret);
++		return -1;
++	}
++
++	return 0;
++}
++#endif
++
+ int board_early_init_r(void)
+ {
+ 	dcache_disable();
++
++#ifdef CONFIG_CORTINA_QSPI
++	iomux_sflash4_enable();
++	init_qspi();
++#endif
++
++#ifdef CONFIG_MTD_SPI_NAND
++	init_spinand();
++#endif
++
++	return 0;
++}
++
++#ifdef CONFIG_LAST_STAGE_INIT
++int last_stage_init(void)
++{
++#ifdef CONFIG_SPI_FLASH
++	init_spinor();
++#endif
++
+ 	return 0;
+ }
++#endif
+ 
+ #define CYGARC_KSEG_UNCACHED_BASE (0xa0000000)
+ #define HAL_DCACHE_SIZE           (0x4000)
+@@ -49,26 +133,26 @@ void rlx_flush_write_buffer(void)
+ 	__sync();
+ 	/* read a uncacheable address to cause write buffer to be flushed */
+ 	/*CYGARC_KSEG_UNCACHED_BASE or 0xbfc00000*/
+-	__asm__ __volatile__( ".set\tpush\n"
+-			      ".set\tnoreorder\n"
+-			      "\tlw\t$0, %0\n"
+-			      "\tnop\n"
+-			      ".set\tpop\n"
+-			      : /* no output */
+-			      : "m" (*(int *)CYGARC_KSEG_UNCACHED_BASE)
+-			      : "memory");
++	__asm__ __volatile__(".set\tpush\n"
++			     ".set\tnoreorder\n"
++			     "\tlw\t$0, %0\n"
++			     "\tnop\n"
++			     ".set\tpop\n"
++			     : /* no output */
++			     : "m" (*(int *)CYGARC_KSEG_UNCACHED_BASE)
++			     : "memory");
+ }
+ 
+ void dcache_flush_all(void)
+ {
+-	__asm__ __volatile__( ".set\tpush\n"
+-			      ".set\tnoreorder\n"
+-			      "\tmfc0\t$8, $20\n"
+-			      "\tori \t$8, 0x200\n"
+-			      "\txori\t$9, $8, 0x200\n"
+-			      "\tmtc0\t$9, $20\n"
+-			      "\tmtc0\t$8, $20\n"
+-			      ".set\tpop\n");
++	__asm__ __volatile__(".set\tpush\n"
++			     ".set\tnoreorder\n"
++			     "\tmfc0\t$8, $20\n"
++			     "\tori \t$8, 0x200\n"
++			     "\txori\t$9, $8, 0x200\n"
++			     "\tmtc0\t$9, $20\n"
++			     "\tmtc0\t$8, $20\n"
++			     ".set\tpop\n");
+ 
+ 	rlx_flush_write_buffer();
+ }
+diff --git a/configs/cortina_saturn2-engboard-nand_defconfig b/configs/cortina_saturn2-engboard-nand_defconfig
+new file mode 100644
+index 0000000000..d00f493b5c
+--- /dev/null
++++ b/configs/cortina_saturn2-engboard-nand_defconfig
+@@ -0,0 +1,45 @@
++CONFIG_MIPS=y
++CONFIG_SYS_ARCH="mips"
++CONFIG_TARGET_SATURN2=y
++CONFIG_SYS_TEXT_BASE=0x84000000
++CONFIG_SYS_DCACHE_SIZE=32768
++CONFIG_SYS_DCACHE_LINE_SIZE=32
++CONFIG_SYS_ICACHE_SIZE=65536
++CONFIG_SYS_ICACHE_LINE_SIZE=32
++
++CONFIG_ENV_SIZE=0x20000
++CONFIG_NR_DRAM_BANKS=1
++CONFIG_IDENT_STRING="Saturn-SoC"
++CONFIG_SHOW_BOOT_PROGRESS=y
++CONFIG_BOOTDELAY=3
++CONFIG_BOARD_EARLY_INIT_R=y
++CONFIG_SYS_PROMPT="SATURN2#"
++CONFIG_CMD_WDT=y
++CONFIG_CMD_TIMER=y
++CONFIG_OF_CONTROL=y
++CONFIG_OF_LIVE=y
++CONFIG_DEFAULT_DEVICE_TREE="ca-saturn2-engboard"
++# CONFIG_NET is not set
++CONFIG_DM=y
++# CONFIG_MMC is not set
++CONFIG_DM_SERIAL=y
++CONFIG_CORTINA_UART=y
++CONFIG_WDT=y
++CONFIG_WDT_CORTINA=y
++CONFIG_MIPS_CACHE_INDEX_BASE=0
++
++# SPI-NAND support
++CONFIG_DM_SPI=y
++CONFIG_SPI=y
++CONFIG_SPI_MEM=y
++CONFIG_DM_SPI_FLASH=y
++CONFIG_SPI_FLASH=y
++CONFIG_CORTINA_QSPI=y
++CONFIG_CMD_SPI=y
++
++CONFIG_DM_MTD=y
++CONFIG_MTD=y
++CONFIG_MTD_NAND_CORE=y
++CONFIG_MTD_SPI_NAND=y
++CONFIG_CMD_MTD=y
++CONFIG_CMD_MTDPARTS=y
+diff --git a/configs/cortina_saturn2-engboard-nor_defconfig b/configs/cortina_saturn2-engboard-nor_defconfig
+new file mode 100644
+index 0000000000..de02cc2306
+--- /dev/null
++++ b/configs/cortina_saturn2-engboard-nor_defconfig
+@@ -0,0 +1,55 @@
++CONFIG_MIPS=y
++CONFIG_SYS_ARCH="mips"
++CONFIG_TARGET_SATURN2=y
++CONFIG_SYS_TEXT_BASE=0x84000000
++CONFIG_SYS_DCACHE_SIZE=32768
++CONFIG_SYS_DCACHE_LINE_SIZE=32
++CONFIG_SYS_ICACHE_SIZE=65536
++CONFIG_SYS_ICACHE_LINE_SIZE=32
++
++CONFIG_ENV_SIZE=0x20000
++CONFIG_NR_DRAM_BANKS=1
++CONFIG_IDENT_STRING="Saturn-SoC"
++CONFIG_SHOW_BOOT_PROGRESS=y
++CONFIG_BOOTDELAY=3
++CONFIG_BOARD_EARLY_INIT_R=y
++CONFIG_SYS_PROMPT="SATURN2#"
++CONFIG_CMD_WDT=y
++CONFIG_CMD_TIMER=y
++CONFIG_OF_CONTROL=y
++CONFIG_OF_LIVE=y
++CONFIG_DEFAULT_DEVICE_TREE="ca-saturn2-engboard"
++# CONFIG_NET is not set
++CONFIG_DM=y
++# CONFIG_MMC is not set
++CONFIG_DM_SERIAL=y
++CONFIG_CORTINA_UART=y
++CONFIG_WDT=y
++CONFIG_WDT_CORTINA=y
++CONFIG_MIPS_CACHE_INDEX_BASE=0
++
++# SPI-NOR Flash Support
++CONFIG_DM_SPI=y
++CONFIG_DM_SPI_FLASH=y
++CONFIG_CORTINA_QSPI=y
++
++CONFIG_SPI=y
++CONFIG_SPI_MEM=y
++CONFIG_SPI_FLASH=y
++CONFIG_SPI_FLASH_SFDP_SUPPORT=y
++CONFIG_SPI_FLASH_ATMEL=y
++CONFIG_SPI_FLASH_EON=y
++CONFIG_SPI_FLASH_GIGADEVICE=y
++CONFIG_SPI_FLASH_ISSI=y
++CONFIG_SPI_FLASH_MACRONIX=y
++CONFIG_SPI_FLASH_STMICRO=y
++CONFIG_SPI_FLASH_SPANSION=y
++CONFIG_SPI_FLASH_SST=y
++CONFIG_SPI_FLASH_STMICRO=y
++CONFIG_SPI_FLASH_WINBOND=y
++CONFIG_SPI_FLASH_XMC=y
++CONFIG_CMD_SPI=y
++CONFIG_CMD_SF=y
++CONFIG_CMD_MTD=y
++CONFIG_MTD=y
++CONFIG_SPI_FLASH_MTD=y
+-- 
+2.20.1
+

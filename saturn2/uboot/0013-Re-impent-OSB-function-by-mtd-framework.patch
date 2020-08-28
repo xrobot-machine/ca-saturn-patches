@@ -1,0 +1,256 @@
+From c7be2e5887850b93a60273f55c8e82cae1e3340f Mon Sep 17 00:00:00 2001
+From: Lee Jenfeng <jenfeng.lee@cortina-access.com>
+Date: Mon, 17 Aug 2020 14:43:55 +0800
+Subject: [PATCH 13/15] Re-impent OSB function by mtd framework
+
+It's not necessary to implement OSB for different flashes. Use mtd
+interface, simplify codes and save efforts in future.
+---
+ board/cortina/common/Kconfig   |  26 ++++-
+ board/cortina/common/Makefile  |   1 +
+ board/cortina/common/mtd_osb.c | 177 +++++++++++++++++++++++++++++++++
+ 3 files changed, 202 insertions(+), 2 deletions(-)
+ create mode 100644 board/cortina/common/mtd_osb.c
+
+diff --git a/board/cortina/common/Kconfig b/board/cortina/common/Kconfig
+index 40438bb7ce..df397f63fd 100644
+--- a/board/cortina/common/Kconfig
++++ b/board/cortina/common/Kconfig
+@@ -12,15 +12,37 @@ config CORTINA_FAILOVER
+ 
+ config CORTINA_OSB
+       bool
+-      depends on CORTINA_OSB_NAND
++      depends on CORTINA_OSB_NAND || CORTINA_OSB_MTD
+       default y
+ 
+ config CORTINA_OSB_NAND
+        bool "NAND"
+-       depends on NAND_CORTINA
+        help
+          RAW NAND OSB Support
+ 
++config CORTINA_OSB_MTD
++       bool "OSB for flash"
++       help
++         OSB feature for different kinds of flash
++
++config OSB_REGISTER
++       hex "register"
++       depends on CORTINA_OSB_MTD
++       help
++          OSB register address
++
++config OSB_RANGE
++       hex  "range"
++       depends on CORTINA_OSB_MTD
++       help
++         Specifies the length of GPT partition in
++
++config OSB_MTD_NAME
++       string "anme"
++       depends on CORTINA_OSB_MTD
++       help
++         Where fip image store
++
+ menu "Cortina commands"
+ 
+ config CMD_CORTINA_SB_PROCESS
+diff --git a/board/cortina/common/Makefile b/board/cortina/common/Makefile
+index 05d3047bd6..2db784d588 100644
+--- a/board/cortina/common/Makefile
++++ b/board/cortina/common/Makefile
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0+
+ 
+ obj-$(CONFIG_CORTINA_OSB_NAND) += nand_osb.o osb_base.o
++obj-$(CONFIG_CORTINA_OSB_MTD) += mtd_osb.o
+ obj-$(CONFIG_CMD_CORTINA_SB_PROCESS) += cmd_sb_process.o
+ obj-$(CONFIG_CMD_CORTINA_IMAGE_SELECT) += cmd_ca_img.o
+ 
+diff --git a/board/cortina/common/mtd_osb.c b/board/cortina/common/mtd_osb.c
+new file mode 100644
+index 0000000000..7fabd0cda0
+--- /dev/null
++++ b/board/cortina/common/mtd_osb.c
+@@ -0,0 +1,177 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) 2015-2020, Cortina-Access Incorporation.
++ */
++
++#include <common.h>
++#include <mtd.h>
++#include <asm/io.h>
++
++static u8 fip_guid[] = {
++	0x00, 0x70, 0x77, 0xca, 0x90, 0xf1, 0x9b, 0xb6,
++	0x81, 0x36, 0xde, 0xa2, 0x83, 0x5d, 0x41, 0x78,
++};
++
++static gpt_entry **get_gpt_entry(void *buffer)
++{
++	gpt_entry **fip_entries;
++	gpt_header *header = (gpt_header *) (buffer + sizeof(legacy_mbr));
++	gpt_entry *first, *last;
++
++	if (memcmp(&header->signature, "EFI PART", 8) != 0) {
++		printf("OSB:Not GPT header\n");
++		return NULL;
++	}
++
++	fip_entries = malloc(2 * sizeof(gpt_entry *));
++	if (!fip_entries)
++		return NULL;
++
++	fip_entries[0] = NULL;
++	fip_entries[1] = NULL;
++
++	first = (gpt_entry *)(buffer + header->partition_entry_lba * 512);
++	last = first + header->num_partition_entries;
++	for (; first != last; ++first) {
++		if (first->starting_lba == 0 || first->ending_lba == 0)
++			continue;
++
++		if (memcmp(first->partition_type_guid.b, fip_guid,
++			   sizeof(fip_guid)) != 0) {
++			continue;
++		}
++
++		if (first->attributes.fields.type_guid_specific & 0x01)
++			fip_entries[0] = first;
++		else
++			fip_entries[1] = first;
++	}
++
++	if (!fip_entries[0] || !fip_entries[1]) {
++		free(fip_entries);
++		return NULL;
++	}
++
++	return fip_entries;
++}
++
++static u64 get_gpt_info(struct mtd_info *mtd, u32 from, u32 end, u_char *buf,
++			size_t bufsize)
++{
++	int rval;
++	size_t len;
++
++	for (; from < end; from += mtd->erasesize) {
++		len = mtd->erasesize;
++		if (mtd_block_isbad(mtd, from))
++			continue;
++
++		rval = mtd_read(mtd, from, len, &len, buf);
++		if ((rval && rval != -EUCLEAN) || len != mtd->erasesize) {
++			printf("OSB:read gpt failed\n");
++			return -EIO;
++		}
++		break;
++	}
++
++	return from;
++}
++
++static int write_one(struct mtd_info *mtd, loff_t offset,
++		     uchar *buf, size_t bufsize)
++{
++	int ret;
++	struct erase_info erase_op = {};
++
++	erase_op.mtd = mtd;
++	erase_op.addr = offset;
++	erase_op.len = bufsize;
++
++	ret = mtd_erase(mtd, &erase_op);
++	if (ret != 0)
++		return ret;
++
++	return mtd_write(mtd, offset, bufsize, &bufsize, buf);
++}
++
++static int write_gpt(struct mtd_info *mtd, loff_t offset, loff_t end,
++		     uchar *buf, size_t bufsize)
++{
++	int ret;
++
++	for ( ; offset < end; offset += mtd->erasesize) {
++		ret = write_one(mtd, offset, buf, bufsize);
++		if (ret == 0)
++			return 0;
++
++		printf("Update GPT at %llx failed\n", offset);
++	}
++
++	printf("No empty space before %llx\n", end);
++	return -EIO;
++}
++
++static int do_update_gpt_information(void)
++{
++	int ret;
++	uchar *buf;
++	loff_t offset, end;
++	struct mtd_info *mtd;
++	gpt_entry **fip_entries;
++
++	mtd = get_mtd_device_nm(CONFIG_OSB_MTD_NAME);
++	if (IS_ERR_OR_NULL(mtd))
++		return -ENODEV;
++
++	buf = malloc(mtd->erasesize);
++	if (!buf) {
++		ret = -ENOMEM;
++		goto out1;
++	}
++
++	offset = get_gpt_info(mtd, 0, CONFIG_OSB_RANGE, buf, mtd->erasesize);
++	if (offset >= CONFIG_OSB_RANGE) {
++		ret = -ERANGE;
++		goto out2;
++	}
++
++	fip_entries = get_gpt_entry(buf);
++	if (!fip_entries) {
++		ret = -EINVAL;
++		goto out2;
++	}
++
++	fip_entries[0]->attributes.fields.type_guid_specific &= ~0x01;
++	fip_entries[1]->attributes.fields.type_guid_specific |= 0x01;
++
++	end = min(fip_entries[0]->starting_lba, fip_entries[1]->starting_lba);
++	end *= 512;
++	ret = write_gpt(mtd, offset, end, buf, mtd->erasesize);
++
++	free(fip_entries);
++out2:
++	free(buf);
++out1:
++	put_mtd_device(mtd);
++	return ret;
++}
++
++int update_gpt_information(void)
++{
++	u32 val;
++
++	val = readl((const void *)CONFIG_OSB_REGISTER);
++	if ((val & 0xFFFFFF) != 0x0042534F)
++		return 0;
++
++	printf("Boot by OSB\n");
++	if (do_update_gpt_information()) {
++		printf("Swap acttive/standby OSB flag error\n");
++	        printf("Run original bootloader next boot\n");
++	}
++
++	writel(0L, (void *)CONFIG_OSB_REGISTER);
++	printf("OSB:clear\n");
++
++	return 0;
++}
+-- 
+2.20.1
+

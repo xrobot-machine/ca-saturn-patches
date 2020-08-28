@@ -1,0 +1,512 @@
+From 22418044ec269cf92498e74acd4559b44520e517 Mon Sep 17 00:00:00 2001
+From: Lee Jenfeng <jenfeng.lee@cortina-access.com>
+Date: Fri, 21 Aug 2020 14:03:46 +0800
+Subject: [PATCH 15/15] Remove OSB-NAND codebase
+
+Now, OSB_MTD could work on all kinds of flashes, includes NAND flash,
+NOR flash, SPI-NOR, and SPI-NAND. Duplicated code base is not necessary.
+
+Because of this change, upgrade venus defautl config, too.
+---
+ board/cortina/common/Kconfig                  |   7 +-
+ board/cortina/common/Makefile                 |   1 -
+ board/cortina/common/nand_osb.c               | 320 ------------------
+ board/cortina/common/osb_base.c               |  81 -----
+ board/cortina/common/osb_base.h               |  22 --
+ configs/cortina_venus-engboard-nand_defconfig |   5 +-
+ 6 files changed, 5 insertions(+), 431 deletions(-)
+ delete mode 100644 board/cortina/common/nand_osb.c
+ delete mode 100644 board/cortina/common/osb_base.c
+ delete mode 100644 board/cortina/common/osb_base.h
+
+diff --git a/board/cortina/common/Kconfig b/board/cortina/common/Kconfig
+index df397f63fd..06efb6e9fa 100644
+--- a/board/cortina/common/Kconfig
++++ b/board/cortina/common/Kconfig
+@@ -12,14 +12,9 @@ config CORTINA_FAILOVER
+ 
+ config CORTINA_OSB
+       bool
+-      depends on CORTINA_OSB_NAND || CORTINA_OSB_MTD
++      depends on CORTINA_OSB_MTD
+       default y
+ 
+-config CORTINA_OSB_NAND
+-       bool "NAND"
+-       help
+-         RAW NAND OSB Support
+-
+ config CORTINA_OSB_MTD
+        bool "OSB for flash"
+        help
+diff --git a/board/cortina/common/Makefile b/board/cortina/common/Makefile
+index 2db784d588..67e08da200 100644
+--- a/board/cortina/common/Makefile
++++ b/board/cortina/common/Makefile
+@@ -1,6 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0+
+ 
+-obj-$(CONFIG_CORTINA_OSB_NAND) += nand_osb.o osb_base.o
+ obj-$(CONFIG_CORTINA_OSB_MTD) += mtd_osb.o
+ obj-$(CONFIG_CMD_CORTINA_SB_PROCESS) += cmd_sb_process.o
+ obj-$(CONFIG_CMD_CORTINA_IMAGE_SELECT) += cmd_ca_img.o
+diff --git a/board/cortina/common/nand_osb.c b/board/cortina/common/nand_osb.c
+deleted file mode 100644
+index 6f17229fec..0000000000
+--- a/board/cortina/common/nand_osb.c
++++ /dev/null
+@@ -1,320 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0+
+-/*
+- * Copyright (C) 2015-2020, Cortina-Access Incorporation.
+- */
+-
+-#include "osb_base.h"
+-#include <common.h>
+-#include <asm/io.h>
+-#include <nand.h>
+-#include <part_efi.h>
+-
+-#define SSB_PARTITION_BOUNDARY (0x400000)
+-
+-static int do_nand_write_one_block(struct mtd_info *nand, loff_t offset,
+-				   u_char *buffer)
+-{
+-	int rval;
+-	size_t length;
+-	nand_erase_options_t opts;
+-
+-	opts.offset = offset;
+-	opts.length = nand->erasesize;
+-	opts.jffs2 = 0;
+-	opts.spread = 0;
+-	opts.scrub = 0;
+-	opts.quiet = 1;
+-	opts.lim = nand->size;
+-
+-	if (nand_erase_opts(nand, &opts) != 0) {
+-		printf("OSB:Erase block 0x%08llx failed\n", offset);
+-		return 1;
+-	}
+-
+-	length = nand->erasesize;
+-	rval = nand_write(nand, offset, &length, buffer);
+-	if (rval != 0 || length != nand->erasesize) {
+-		printf("OSB:Write block 0x%08llx failed\n", offset);
+-		return 1;
+-	}
+-
+-	return 0;
+-}
+-
+-static int nand_write_one_block(struct mtd_info *nand, loff_t offset,
+-				u_char *buffer)
+-{
+-	int rval;
+-	nand_erase_options_t opts;
+-
+-	opts.offset = offset;
+-	opts.length = nand->erasesize;
+-	opts.jffs2 = 0;
+-	opts.spread = 0;
+-	opts.scrub = 0;
+-	opts.quiet = 1;
+-	opts.lim = nand->size;
+-
+-	if (nand_block_isbad(nand, offset)) {
+-		printf("OSB:bad block 0x%08llx\n", offset);
+-		return 1;
+-	}
+-
+-	rval = do_nand_write_one_block(nand, offset, buffer);
+-	if (rval != 0)
+-		return 1;
+-
+-	rval = nand_verify(nand, offset, nand->erasesize, buffer);
+-	if (rval != 0) {
+-		printf("OSB:Write block 0x%08llx failed\n", offset);
+-		return 1;
+-	}
+-
+-	return 0;
+-}
+-
+-static size_t nand_write_blocks(struct mtd_info *nand, loff_t offset,
+-				u_char *buf, size_t buf_size)
+-{
+-	int rval;
+-	size_t total_written_size;
+-
+-	total_written_size = 0;
+-	for (; total_written_size < buf_size;) {
+-		if (nand_block_isbad(nand, offset))
+-			return total_written_size;
+-
+-		rval = nand_write_one_block(nand, offset,
+-					    buf + total_written_size);
+-		if (rval != 0) {
+-			printf("OSB:mark 0x%08llx bad because write failed\n",
+-			       offset);
+-			mtd_block_markbad(nand, offset);
+-			return total_written_size;
+-		}
+-
+-		offset += nand->erasesize;
+-		total_written_size += nand->erasesize;
+-	}
+-
+-	return buf_size;
+-}
+-
+-static int fip2mtd(loff_t offset, u_char *fip_buf, size_t fip_size,
+-		   gpt_entry *fip_entry)
+-{
+-	int good;
+-	loff_t occupied_start, occupied_end;
+-	struct mtd_info *nand = get_nand_dev_by_index(nand_curr_device);
+-	size_t block_num = (fip_size + nand->erasesize - 1) / nand->erasesize;
+-
+-	occupied_start = lba2offset(fip_entry->starting_lba);
+-	occupied_end = lba2offset(fip_entry->ending_lba + 1);
+-
+-	loff_t new_offset = SSB_PARTITION_BOUNDARY - nand->erasesize;
+-
+-	for (;;) {
+-		good = 0;
+-		for (; new_offset > offset; new_offset -= nand->erasesize) {
+-			if (occupied_start <= new_offset &&
+-			    new_offset < occupied_end) {
+-				good = 0;
+-				continue;
+-			}
+-
+-			if (nand_block_isbad(nand, new_offset)) {
+-				good = 0;
+-				continue;
+-			}
+-
+-			good += 1;
+-			if (good >= block_num)
+-				break;
+-		}
+-
+-		if (new_offset <= offset)
+-			return 0;
+-
+-		if (nand_write_blocks(nand, new_offset, fip_buf, fip_size) ==
+-		    fip_size) {
+-			break;
+-		}
+-	}
+-
+-	return new_offset;
+-}
+-
+-static u_char *get_fip_contents(loff_t offset, u_char *buffer,
+-				gpt_entry *entry)
+-{
+-	int rval;
+-	u_char *fip_buf;
+-	size_t fip_size;
+-	size_t remainder;
+-	size_t length, read_length;
+-	struct mtd_info *nand = get_nand_dev_by_index(nand_curr_device);
+-
+-	remainder = lba2offset(entry->starting_lba) % nand->erasesize;
+-
+-	fip_size = (entry->ending_lba - entry->starting_lba + 1) * 512;
+-	length = fip_size;
+-	fip_buf = malloc(length);
+-	if (!fip_buf)
+-		return NULL;
+-
+-	remainder = lba2offset(entry->starting_lba) % nand->erasesize;
+-	memcpy(fip_buf, buffer + remainder, nand->erasesize - remainder);
+-
+-	length = fip_size - (nand->erasesize - remainder);
+-	read_length = length;
+-	rval = nand_read(nand, offset + nand->erasesize, &read_length,
+-			 fip_buf + (nand->erasesize - remainder));
+-	if ((rval && rval != -EUCLEAN) || read_length != length) {
+-		free(fip_buf);
+-		printf("OSB:load fip data failed\n");
+-		return NULL;
+-	}
+-
+-	return fip_buf;
+-}
+-
+-static int move_fip_to_other_place(loff_t offset, u_char *buffer,
+-				   gpt_entry **fip_entries)
+-{
+-	size_t fip_size;
+-	loff_t new_addr;
+-	u_char *fip_buf;
+-	gpt_entry *entry = get_closest_entry(fip_entries);
+-
+-	fip_size = (entry->ending_lba - entry->starting_lba + 1) * 512;
+-	fip_buf = get_fip_contents(offset, buffer, entry);
+-
+-	if (!fip_buf)
+-		return -EIO;
+-
+-	if (entry == fip_entries[0])
+-		new_addr = fip2mtd(offset, fip_buf, fip_size, fip_entries[1]);
+-	else
+-		new_addr = fip2mtd(offset, fip_buf, fip_size, fip_entries[0]);
+-
+-	if (new_addr == 0)
+-		return 1;
+-
+-	entry->starting_lba = offset2lba(new_addr);
+-	entry->ending_lba = offset2lba(new_addr + fip_size);
+-
+-	printf("OSB:Move overlayed fip to 0x%08llx\n", new_addr);
+-	free(fip_buf);
+-	return 0;
+-}
+-
+-static int write_gpt2nand(loff_t gpt_offset, u_char *buffer,
+-			  gpt_entry **fip_entries)
+-{
+-	int rval;
+-	size_t length;
+-	gpt_entry *entry;
+-	nand_erase_options_t opts;
+-	struct mtd_info *nand = get_nand_dev_by_index(nand_curr_device);
+-
+-	rval = nand_write_one_block(nand, gpt_offset, buffer);
+-	if (rval == 0)
+-		return 0;
+-
+-	/*
+-	 * Write it again. Hope nandinfo information could write into flash.
+-	 * If not, it is failed to boot definitely.
+-	 */
+-	do_nand_write_one_block(nand, gpt_offset, buffer);
+-	mtd_block_markbad(nand, gpt_offset);
+-
+-	rval = is_fip_inside_gpt_block(gpt_offset, fip_entries,
+-				       nand->erasesize);
+-	if (rval == 2 &&
+-	    move_fip_to_other_place(gpt_offset, buffer, fip_entries) != 0) {
+-		printf("OSB:Move fip to others address failed\n");
+-		return 0;
+-	}
+-
+-	entry = get_closest_entry(fip_entries);
+-	length = nand->erasesize;
+-
+-	opts.offset = gpt_offset + nand->erasesize;
+-	opts.length = lba2offset(entry->starting_lba) - opts.offset;
+-	opts.jffs2 = 0;
+-	opts.spread = 0;
+-	opts.scrub = 0;
+-	opts.quiet = 1;
+-	opts.lim = lba2offset(entry->starting_lba);
+-
+-	if (nand_erase_opts(nand, &opts) != 0) {
+-		printf("OSB:Erase block 0x%08llx with 0x%08llx failed\n",
+-		       opts.offset, opts.length);
+-		return 1;
+-	}
+-
+-	return nand_write_skip_bad(nand, gpt_offset + nand->erasesize, &length,
+-			NULL, lba2offset(entry->starting_lba),
+-			buffer, WITH_WR_VERIFY);
+-}
+-
+-int update_gpt_information(void)
+-{
+-	int rval;
+-	size_t length;
+-	loff_t gpt_offset;
+-	u_char *buffer;
+-	u32 val = readl(GLOBAL_SOFTWARE2);
+-	struct mtd_info *nand = get_nand_dev_by_index(nand_curr_device);
+-	gpt_entry **fip_entries;
+-
+-	if ((val & 0xFFFFFF) != 0x0042534F)
+-		return 0;
+-
+-	printf("Boot by OSB\n");
+-
+-	buffer = malloc(nand->erasesize);
+-	if (!buffer)
+-		return -ENOMEM;
+-
+-	gpt_offset = 0;
+-	for (; gpt_offset < SSB_PARTITION_BOUNDARY;
+-	     gpt_offset += nand->erasesize) {
+-		length = nand->erasesize;
+-		if (nand_block_isbad(nand, gpt_offset))
+-			continue;
+-
+-		rval = nand_read(nand, gpt_offset, &length, buffer);
+-		if ((rval && rval != -EUCLEAN) || length != nand->erasesize) {
+-			printf("OSB:read gpt failed\n");
+-			return -EIO;
+-		}
+-		break;
+-	}
+-
+-	if (gpt_offset >= SSB_PARTITION_BOUNDARY) {
+-		free(buffer);
+-		return -ERANGE;
+-	}
+-
+-	fip_entries = get_gpt_entry(buffer);
+-	if (!fip_entries) {
+-		free(buffer);
+-		printf("OSB:GPT entries found failed\n");
+-		return -EINVAL;
+-	}
+-
+-	fip_entries[0]->attributes.fields.type_guid_specific &= ~0x01;
+-	fip_entries[1]->attributes.fields.type_guid_specific |= 0x01;
+-
+-	rval = write_gpt2nand(gpt_offset, buffer, fip_entries);
+-	if (rval == 0) {
+-		writel(0L, GLOBAL_SOFTWARE2);
+-		printf("OSB:clear\n");
+-	}
+-
+-	free(buffer);
+-	free(fip_entries);
+-
+-	return rval;
+-}
+diff --git a/board/cortina/common/osb_base.c b/board/cortina/common/osb_base.c
+deleted file mode 100644
+index 2c09fa37d2..0000000000
+--- a/board/cortina/common/osb_base.c
++++ /dev/null
+@@ -1,81 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0+
+-/*
+- * Copyright (C) 2015-2020, Cortina-Access Incorporation.
+- */
+-
+-#include "osb_base.h"
+-#include <common.h>
+-#include <malloc.h>
+-
+-static u8 fip_guid[] = {
+-	0x00, 0x70, 0x77, 0xca, 0x90, 0xf1, 0x9b, 0xb6,
+-	0x81, 0x36, 0xde, 0xa2, 0x83, 0x5d, 0x41, 0x78,
+-};
+-
+-gpt_entry **get_gpt_entry(void *buffer)
+-{
+-	gpt_entry **fip_entries;
+-	gpt_header *header = (gpt_header *) (buffer + sizeof(legacy_mbr));
+-	gpt_entry *first, *last;
+-
+-	if (memcmp(&header->signature, "EFI PART", 8) != 0) {
+-		printf("OSB:Not GPT header\n");
+-		return NULL;
+-	}
+-
+-	fip_entries = malloc(2 * sizeof(gpt_entry *));
+-	if (!fip_entries)
+-		return NULL;
+-
+-	fip_entries[0] = NULL;
+-	fip_entries[1] = NULL;
+-
+-	first = (gpt_entry *)(buffer + header->partition_entry_lba * 512);
+-	last = first + header->num_partition_entries;
+-	for (; first != last; ++first) {
+-		if (first->starting_lba == 0 || first->ending_lba == 0)
+-			continue;
+-
+-		if (memcmp(first->partition_type_guid.b, fip_guid,
+-			   sizeof(fip_guid)) != 0) {
+-			continue;
+-		}
+-
+-		if (first->attributes.fields.type_guid_specific & 0x01)
+-			fip_entries[0] = first;
+-		else
+-			fip_entries[1] = first;
+-	}
+-
+-	if (!fip_entries[0] || !fip_entries[1]) {
+-		free(fip_entries);
+-		return NULL;
+-	}
+-
+-	return fip_entries;
+-}
+-
+-gpt_entry *get_closest_entry(gpt_entry **fip_entries)
+-{
+-	if (fip_entries[0]->starting_lba < fip_entries[1]->starting_lba)
+-		return fip_entries[0];
+-
+-	return fip_entries[1];
+-}
+-
+-/**
+- * return 0 is outside; 1 is inside complete, 2 is inside partially.
+- */
+-int is_fip_inside_gpt_block(loff_t gpt_offset, gpt_entry **fip_entries,
+-			    u32 block_size)
+-{
+-	gpt_entry *entry = get_closest_entry(fip_entries);
+-
+-	if (gpt_offset + block_size < lba2offset(entry->starting_lba))
+-		return 0;
+-
+-	if (gpt_offset + block_size >= lba2offset(entry->ending_lba + 1))
+-		return 1;
+-
+-	return 2;
+-}
+diff --git a/board/cortina/common/osb_base.h b/board/cortina/common/osb_base.h
+deleted file mode 100644
+index a2f37e4b47..0000000000
+--- a/board/cortina/common/osb_base.h
++++ /dev/null
+@@ -1,22 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0+ */
+-/*
+- * (C) Copyright 2020 - Cortina Access Inc.
+- *
+- */
+-
+-#ifndef OSB_BASE_H_84FCFC72_9E1B_4B28_AD88_FB95051820BD
+-#define OSB_BASE_H_84FCFC72_9E1B_4B28_AD88_FB95051820BD
+-
+-#include <part_efi.h>
+-#include <linux/types.h>
+-
+-#if !defined(__ASSEMBLER__) && !defined(__ASSEMBLY__)
+-gpt_entry * *get_gpt_entry(void *buffer);
+-gpt_entry *get_closest_entry(gpt_entry **fip_entries);
+-int is_fip_inside_gpt_block(loff_t gpt_offset, gpt_entry **fip_entries,
+-			    u32 block_size);
+-
+-#define lba2offset(lba) ((lba) * 512L)
+-#define offset2lba(offset) ((offset) / 512L)
+-#endif /* !__ASSEMBLER__ */
+-#endif
+diff --git a/configs/cortina_venus-engboard-nand_defconfig b/configs/cortina_venus-engboard-nand_defconfig
+index 274ada87dc..7b095ff787 100644
+--- a/configs/cortina_venus-engboard-nand_defconfig
++++ b/configs/cortina_venus-engboard-nand_defconfig
+@@ -61,7 +61,10 @@ CONFIG_CMD_UBI=y
+ CONFIG_CMD_MTDPARTS=y
+ 
+ # OSB feature
+-CONFIG_CORTINA_OSB_NAND=y
++CONFIG_CORTINA_OSB_MTD=y
++CONFIG_OSB_REGISTER=0xf4320118
++CONFIG_OSB_RANGE=0x400000
++CONFIG_OSB_MTD_NAME="nand0"
+ 
+ # Failover feature
+ CONFIG_CORTINA_FAILOVER=y
+-- 
+2.20.1
+

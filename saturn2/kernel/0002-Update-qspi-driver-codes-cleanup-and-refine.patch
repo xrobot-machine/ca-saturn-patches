@@ -1,14 +1,21 @@
-From cfebc18b8e64a960fa277faa605ea112a99de83f Mon Sep 17 00:00:00 2001
+From 5f0b0bf76e23e6ac3f1a6bce2effda9cd6e1db2d Mon Sep 17 00:00:00 2001
 From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
-Date: Mon, 17 Aug 2020 17:21:34 +0800
-Subject: [PATCH 2/3] update qspi driver for kernel4.14
+Date: Fri, 28 Aug 2020 12:16:09 +0800
+Subject: [PATCH 2/2] Update qspi driver codes, cleanup and refine
 
+* We had did more testing and verifications on uboot-v2020.04,
+  so it's better to sync on the source codes on both sides.
+
+Type:fix
+Scope:saturn-sfu, saturn2-sfu
+Bug:N/A
+Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
 ---
- drivers/spi/spi-cortina-qspi.c | 340 +++++++++++++++++------------------------
- 1 file changed, 140 insertions(+), 200 deletions(-)
+ drivers/spi/spi-cortina-qspi.c | 357 +++++++++++++++++------------------------
+ 1 file changed, 144 insertions(+), 213 deletions(-)
 
 diff --git a/drivers/spi/spi-cortina-qspi.c b/drivers/spi/spi-cortina-qspi.c
-index d407285..ff7b28f 100644
+index d407285..9c723ee 100644
 --- a/drivers/spi/spi-cortina-qspi.c
 +++ b/drivers/spi/spi-cortina-qspi.c
 @@ -47,120 +47,87 @@
@@ -220,7 +227,7 @@ index d407285..ff7b28f 100644
 -
  	if (timeout == 0) {
 -		printk("!error busy timeout (stat:%#x)\n", stat);
-+		dev_err(dev, "!error busy timeout (stat:%#x)\n", stat);
++		dev_err(qspi->dev, "!error busy timeout (stat:%#x)\n", stat);
  		return -1;
  	}
 -
@@ -258,7 +265,7 @@ index d407285..ff7b28f 100644
  			break;
  		default:
 -			printk("%s:!err datalen=%d.\n", __func__, len);
-+			dev_err("!err datalen=%d.\n", len);
++			dev_err(qspi->dev, "!err datalen=%d.\n", len);
  			return -1;
  		}
  	}
@@ -300,7 +307,7 @@ index d407285..ff7b28f 100644
 +		case 1:
 +			break;
 +		default:
-+			dev_err(dev, "!err datalen=%d\n", len);
++			dev_err(qspi->dev, "!err datalen=%d\n", len);
 +			return -1;
 +		}
 +		ca_reg_write(qspi, data, QSPI_DATA_REG);
@@ -392,7 +399,7 @@ index d407285..ff7b28f 100644
  		val |= QSPI_MIO_INF(QSPI_ACCESS_MIO_SINGLE);
  	} else {
 -		printk("%s:!err buswidth %d.\n", __func__, op->data.buswidth);
-+		dev_err(dev, "!err buswidth %d.\n", op->data.buswidth);
++		dev_err(qspi->dev, "!err buswidth %d.\n", op->data.buswidth);
  		return -1;
  	}
  
@@ -416,7 +423,7 @@ index d407285..ff7b28f 100644
  	unsigned int data_cnt = op->data.nbytes;
 -	u64 addr_offset = op->addr.val;
 +	u32 addr_offset = (u32)op->addr.val;
-+	u8 dummy_cnt = op->dummy.buswidth != 0 ?  ((op->dummy.nbytes * 8)
++	u8 dummy_cnt = op->dummy.buswidth != 0 ? ((op->dummy.nbytes * 8)
 +		/ op->dummy.buswidth) : (op->dummy.nbytes * 8);
  
  	val |= QSPI_ACCODE(opcode);
@@ -494,7 +501,7 @@ index d407285..ff7b28f 100644
  	return 0;
  }
  
-@@ -463,21 +408,16 @@ static int ca_qspi_exec_op(struct spi_mem *mem,
+@@ -463,21 +408,17 @@ static int ca_qspi_exec_op(struct spi_mem *mem,
  	struct ca_qspi *qspi = spi_master_get_devdata(mem->spi->master);
  	u8 opcode;
  
@@ -517,13 +524,76 @@ index d407285..ff7b28f 100644
 +	} else if (op->data.nbytes > 0) {
 +		opcode = QSPI_AC_OP_EXTEND;
 +	} else {
-+		dev_err("!invalid opcode:(0x%02x)\n", op->cmd.opcode);
++		dev_err(qspi->dev,
++			"!invalid opcode:(0x%02x)\n", op->cmd.opcode);
  		return -1;
  	}
 -
  	return ca_qspi_issue_cmd(qspi, (struct spi_mem_op *)op, opcode);
  }
  
+@@ -487,7 +428,6 @@ static void ca_qspi_hw_init(struct ca_qspi *qspi)
+ 
+ 	val = QSPI_SIZE(2);
+ 	ca_reg_write(qspi, val, QSPI_TYPE_REG);
+-
+ 	val = (QSPI_TMR_CLK(0x07) | QSPI_TMR_SETUP(0x01)
+ 		| QSPI_TMR_HOLD(0x01) | QSPI_TMR_IDLE(0x01));
+ 	ca_reg_write(qspi, val, QSPI_TIMING);
+@@ -518,16 +458,13 @@ static int ca_qspi_probe(struct platform_device *pdev)
+ 	/* Only support device-tree instantiation */
+ 	if (!np)
+ 		return -ENODEV;
+-
+ 	if (!of_match_node(ca_qspi_of_match, np))
+ 		return -ENODEV;
+-
+ 	master = spi_alloc_master(dev, sizeof(struct ca_qspi));
+ 	if (!master) {
+-		dev_err(dev, "error allocating spi_master\n");
++		dev_err(dev, "!error allocating spi_master\n");
+ 		return -ENOMEM;
+ 	}
+-
+ 	master->bus_num = -1;
+ 	if (!of_property_read_u32(np, "spi-tx-bus-width", &tx_bus_width)) {
+ 		switch (tx_bus_width) {
+@@ -565,7 +502,6 @@ static int ca_qspi_probe(struct platform_device *pdev)
+ 	}
+ 	master->mem_ops = &ca_qspi_mem_ops;
+ 	master->dev.of_node = dev->of_node;
+-
+ 	qspi = spi_master_get_devdata(master);
+ 	qspi->master = master;
+ 	qspi->dev = &pdev->dev;
+@@ -585,25 +521,20 @@ static int ca_qspi_probe(struct platform_device *pdev)
+ 			res, qspi->base);
+ 	} else {
+ 		dev_err(dev,
+-			"can't get regs base addresses(ret = %d)!\n", ret);
++			"!can't get regs base addresses(ret = %d)!\n", ret);
+ 		goto err;
+ 
+ 	}
+-
+ 	ca_qspi_hw_init(qspi);
+-
+ 	ret = devm_spi_register_master(dev, master);
+ 	if (ret < 0) {
+-		dev_err(dev, "can't register master\n");
++		dev_err(dev, "!can't register master\n");
+ 		goto err;
+ 	}
+-
+ 	dev_info(dev,
+ 		"spi-flash controller probed, while mode_bits=%#06x\n",
+ 		master->mode_bits);
+-
+ 	return 0;
+-
+ err:
+ 	spi_master_put(master);
+ 	return ret;
 -- 
 1.8.3.1
 

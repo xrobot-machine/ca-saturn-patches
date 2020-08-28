@@ -1,0 +1,83 @@
+From a94173cdb064786f592b7805531c4ea84b05c6f7 Mon Sep 17 00:00:00 2001
+From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+Date: Fri, 28 Aug 2020 12:14:41 +0800
+Subject: [PATCH 1/2] Enabled QUAD IO read for spi-nand devices
+
+Type:fix
+Scope:saturn-sfu, saturn2-sfu
+Bug:N/A
+Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
+---
+ drivers/mtd/spinand/gigadevice.c | 4 ++--
+ drivers/mtd/spinand/micron.c     | 4 ++--
+ drivers/mtd/spinand/paragon.c    | 4 ++--
+ drivers/mtd/spinand/winbond.c    | 4 ++--
+ 4 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/mtd/spinand/gigadevice.c b/drivers/mtd/spinand/gigadevice.c
+index e9afcff..fddabca 100644
+--- a/drivers/mtd/spinand/gigadevice.c
++++ b/drivers/mtd/spinand/gigadevice.c
+@@ -21,9 +21,9 @@
+ #define GD5FXGQ4UXFXXG_STATUS_ECC_UNCOR_ERROR	(7 << 4)
+ 
+ static SPINAND_OP_VARIANTS(read_cache_variants,
+-	/* 	SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0), */
++		SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X4_OP(0, 1, NULL, 0),
+-	/*	SPINAND_PAGE_READ_FROM_CACHE_DUALIO_OP(0, 1, NULL, 0), */
++		SPINAND_PAGE_READ_FROM_CACHE_DUALIO_OP(0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X2_OP(0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_OP(true, 0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_OP(false, 0, 1, NULL, 0));
+diff --git a/drivers/mtd/spinand/micron.c b/drivers/mtd/spinand/micron.c
+index e3d8374..9c4381d 100644
+--- a/drivers/mtd/spinand/micron.c
++++ b/drivers/mtd/spinand/micron.c
+@@ -19,9 +19,9 @@
+ #define MICRON_STATUS_ECC_7TO8_BITFLIPS	(5 << 4)
+ 
+ static SPINAND_OP_VARIANTS(read_cache_variants,
+-	/*	SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0), */
++		SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X4_OP(0, 1, NULL, 0),
+-	/*	SPINAND_PAGE_READ_FROM_CACHE_DUALIO_OP(0, 1, NULL, 0), */
++		SPINAND_PAGE_READ_FROM_CACHE_DUALIO_OP(0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X2_OP(0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_OP(true, 0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_OP(false, 0, 1, NULL, 0));
+diff --git a/drivers/mtd/spinand/paragon.c b/drivers/mtd/spinand/paragon.c
+index ef6f6d7..6d5790f 100644
+--- a/drivers/mtd/spinand/paragon.c
++++ b/drivers/mtd/spinand/paragon.c
+@@ -22,9 +22,9 @@
+ 
+ 
+ static SPINAND_OP_VARIANTS(read_cache_variants,
+-	/* 	SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0), */
++		SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X4_OP(0, 1, NULL, 0),
+-	/*	SPINAND_PAGE_READ_FROM_CACHE_DUALIO_OP(0, 1, NULL, 0), */
++		SPINAND_PAGE_READ_FROM_CACHE_DUALIO_OP(0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X2_OP(0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_OP(true, 0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_OP(false, 0, 1, NULL, 0));
+diff --git a/drivers/mtd/spinand/winbond.c b/drivers/mtd/spinand/winbond.c
+index 92e9a08..5d94458 100644
+--- a/drivers/mtd/spinand/winbond.c
++++ b/drivers/mtd/spinand/winbond.c
+@@ -16,9 +16,9 @@
+ #define WINBOND_CFG_BUF_READ		BIT(3)
+ 
+ static SPINAND_OP_VARIANTS(read_cache_variants,
+-	/* 	SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0), */
++		SPINAND_PAGE_READ_FROM_CACHE_QUADIO_OP(0, 2, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X4_OP(0, 1, NULL, 0),
+-	/*	SPINAND_PAGE_READ_FROM_CACHE_DUALIO_OP(0, 1, NULL, 0), */
++		SPINAND_PAGE_READ_FROM_CACHE_DUALIO_OP(0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_X2_OP(0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_OP(true, 0, 1, NULL, 0),
+ 		SPINAND_PAGE_READ_FROM_CACHE_OP(false, 0, 1, NULL, 0));
+-- 
+1.8.3.1
+

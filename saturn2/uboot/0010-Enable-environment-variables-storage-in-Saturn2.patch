@@ -1,0 +1,44 @@
+From 471e71f0f8250f2b5fb8bcc7698fe6e8040b8187 Mon Sep 17 00:00:00 2001
+From: Lee Jenfeng <jenfeng.lee@cortina-access.com>
+Date: Thu, 30 Jul 2020 17:30:22 +0800
+Subject: [PATCH 10/15] Enable environment variables storage in Saturn2
+
+Althouth we implemented ENV_IN_MTD feature. But ENV_IN_SPI_FLASH is for
+spi-nor in pratically. ENV_IN_MTD is for SPI-NAND only.
+---
+ configs/cortina_saturn2-engboard-nand_defconfig | 7 +++++++
+ configs/cortina_saturn2-engboard-nor_defconfig  | 6 ++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/configs/cortina_saturn2-engboard-nand_defconfig b/configs/cortina_saturn2-engboard-nand_defconfig
+index d00f493b5c..fec260c131 100644
+--- a/configs/cortina_saturn2-engboard-nand_defconfig
++++ b/configs/cortina_saturn2-engboard-nand_defconfig
+@@ -43,3 +43,10 @@ CONFIG_MTD_NAND_CORE=y
+ CONFIG_MTD_SPI_NAND=y
+ CONFIG_CMD_MTD=y
+ CONFIG_CMD_MTDPARTS=y
++# ENV Support
++CONFIG_ENV_IS_IN_MTD=y
++CONFIG_ENV_MTD_NAME="spi-nand0"
++CONFIG_ENV_SIZE=0x20000
++CONFIG_ENV_ADDR=0x400000
++CONFIG_ENV_OFFSET=0x400000
++CONFIG_ENV_RANGE=0x100000
+diff --git a/configs/cortina_saturn2-engboard-nor_defconfig b/configs/cortina_saturn2-engboard-nor_defconfig
+index de02cc2306..3d3bcf7626 100644
+--- a/configs/cortina_saturn2-engboard-nor_defconfig
++++ b/configs/cortina_saturn2-engboard-nor_defconfig
+@@ -53,3 +53,9 @@ CONFIG_CMD_SF=y
+ CONFIG_CMD_MTD=y
+ CONFIG_MTD=y
+ CONFIG_SPI_FLASH_MTD=y
++
++# UBoot Environment Variable support
++CONFIG_ENV_SIZE=0x40000
++CONFIG_ENV_SECT_SIZE=0x40000
++CONFIG_ENV_OFFSET=0x300000
++CONFIG_ENV_IS_IN_SPI_FLASH=y
+-- 
+2.20.1
+

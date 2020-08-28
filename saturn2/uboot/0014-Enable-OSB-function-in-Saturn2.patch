@@ -1,0 +1,68 @@
+From 97a7fa3a3e3f52a0ecf66e3f9934b1644e4b9797 Mon Sep 17 00:00:00 2001
+From: Lee Jenfeng <jenfeng.lee@cortina-access.com>
+Date: Thu, 20 Aug 2020 14:00:37 +0800
+Subject: [PATCH 14/15] Enable OSB function in Saturn2
+
+---
+ board/cortina/saturn2/saturn2.c                 | 7 +++++++
+ configs/cortina_saturn2-engboard-nand_defconfig | 7 +++++++
+ configs/cortina_saturn2-engboard-nor_defconfig  | 6 ++++++
+ 3 files changed, 20 insertions(+)
+
+diff --git a/board/cortina/saturn2/saturn2.c b/board/cortina/saturn2/saturn2.c
+index f27e8a426a..9ae72c184d 100644
+--- a/board/cortina/saturn2/saturn2.c
++++ b/board/cortina/saturn2/saturn2.c
+@@ -10,6 +10,9 @@
+ #include <asm/io.h>
+ #include <wdt.h>
+ #include <dm/uclass.h>
++#if defined(CONFIG_CORTINA_OSB)
++  #include <../common/ca_osb.h>
++#endif
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -120,6 +123,10 @@ int last_stage_init(void)
+ 	init_spinor();
+ #endif
+ 
++#if defined(CONFIG_CORTINA_OSB)
++	update_gpt_information();
++#endif
++
+ 	return 0;
+ }
+ #endif
+diff --git a/configs/cortina_saturn2-engboard-nand_defconfig b/configs/cortina_saturn2-engboard-nand_defconfig
+index 2de7ce1a6d..e9ac831fee 100644
+--- a/configs/cortina_saturn2-engboard-nand_defconfig
++++ b/configs/cortina_saturn2-engboard-nand_defconfig
+@@ -64,3 +64,10 @@ CONFIG_CMD_PING=y
+ CONFIG_HUSH_PARSER=y
+ CONFIG_CMD_CORTINA_IMAGE_SELECT=y
+ CONFIG_LZMA=y
++
++# OSB support
++CONFIG_CORTINA_OSB_MTD=y
++CONFIG_OSB_RANGE=0x400000
++CONFIG_OSB_REGISTER=0xbc100104
++CONFIG_OSB_MTD_NAME="spi-nand0"
++CONFIG_LAST_STAGE_INIT=y
+diff --git a/configs/cortina_saturn2-engboard-nor_defconfig b/configs/cortina_saturn2-engboard-nor_defconfig
+index f0d1e584bc..812a60d5cb 100644
+--- a/configs/cortina_saturn2-engboard-nor_defconfig
++++ b/configs/cortina_saturn2-engboard-nor_defconfig
+@@ -72,3 +72,9 @@ CONFIG_CMD_PING=y
+ CONFIG_HUSH_PARSER=y
+ CONFIG_CMD_CORTINA_IMAGE_SELECT=y
+ CONFIG_LZMA=y
++# OSB support
++CONFIG_CORTINA_OSB_MTD=y
++CONFIG_OSB_RANGE=0x400000
++CONFIG_OSB_REGISTER=0xbc100104
++CONFIG_OSB_MTD_NAME="nor0"
++CONFIG_LAST_STAGE_INIT=y
+-- 
+2.20.1
+

@@ -1,4 +1,4 @@
-From c94a03bc369eb6a10b0e8a87281348d767911993 Mon Sep 17 00:00:00 2001
+From 569e38344b1b05b530631f9d0e010b7fd57c9908 Mon Sep 17 00:00:00 2001
 From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
 Date: Fri, 21 Aug 2020 16:06:52 +0800
 Subject: [PATCH 2/3] Add spinand_show_info() for spi-nand devices

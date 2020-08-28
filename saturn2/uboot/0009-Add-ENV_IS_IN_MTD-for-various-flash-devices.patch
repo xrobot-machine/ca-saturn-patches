@@ -1,0 +1,398 @@
+From 33396a0d4121e28a94b63a45e83a0ee23aa4d5ff Mon Sep 17 00:00:00 2001
+From: Lee Jenfeng <jenfeng.lee@cortina-access.com>
+Date: Wed, 12 Aug 2020 17:16:08 +0800
+Subject: [PATCH 09/15] Add ENV_IS_IN_MTD for various flash devices
+
+There are so many enviornmnet storage options, like ENV_IS_IN_NAND,
+ENV_IS_IN_FLASH, and etc. But for SPI-NAND, U-Boot does not support.
+U-Boot has introudece new mtd command for various flash read/write since
+v2018. The mtd frameworkd could process all kinds of flash in generic
+ways.  So, add ENV_IS_IN_MTD for various flash devices, includes
+SPI-NAND.
+---
+ cmd/nvedit.c           |   1 +
+ env/Kconfig            |  32 +++++-
+ env/Makefile           |   1 +
+ env/env.c              |   3 +
+ env/mtd.c              | 248 +++++++++++++++++++++++++++++++++++++++++
+ include/env_internal.h |   1 +
+ 6 files changed, 283 insertions(+), 3 deletions(-)
+ create mode 100644 env/mtd.c
+
+diff --git a/cmd/nvedit.c b/cmd/nvedit.c
+index 81d94cd193..bdd61928c7 100644
+--- a/cmd/nvedit.c
++++ b/cmd/nvedit.c
+@@ -52,6 +52,7 @@ DECLARE_GLOBAL_DATA_PTR;
+ 	defined(CONFIG_ENV_IS_IN_SATA)		|| \
+ 	defined(CONFIG_ENV_IS_IN_SPI_FLASH)	|| \
+ 	defined(CONFIG_ENV_IS_IN_REMOTE)	|| \
++	defined(CONFIG_ENV_IS_IN_MTD)	        || \
+ 	defined(CONFIG_ENV_IS_IN_UBI)
+ 
+ #define ENV_IS_IN_DEVICE
+diff --git a/env/Kconfig b/env/Kconfig
+index 0d6f559b39..4c5ba5cf07 100644
+--- a/env/Kconfig
++++ b/env/Kconfig
+@@ -10,7 +10,7 @@ config ENV_IS_NOWHERE
+ 		     !ENV_IS_IN_MMC && !ENV_IS_IN_NAND && \
+ 		     !ENV_IS_IN_NVRAM && !ENV_IS_IN_ONENAND && \
+ 		     !ENV_IS_IN_REMOTE && !ENV_IS_IN_SPI_FLASH && \
+-		     !ENV_IS_IN_UBI
++		     !ENV_IS_IN_MTD && !ENV_IS_IN_UBI
+ 	help
+ 	  Define this if you don't want to or can't have an environment stored
+ 	  on a storage medium. In this case the environment will still exist
+@@ -67,6 +67,19 @@ config ENV_IS_IN_EXT4
+ 	help
+ 	  Define this if you want to use the EXT4 file system for the environment.
+ 
++config ENV_IS_IN_MTD
++       bool "Environment is in MTD"
++       help
++	 All flashes which MTD framework integrated could use this for the
++         environment
++
++config ENV_MTD_NAME
++       string "The MTD device name of Environment"
++       depends on ENV_IS_IN_MTD
++       help
++         Specifiy MTD device name
++
++
+ config ENV_IS_IN_FLASH
+ 	bool "Environment in flash memory"
+ 	depends on !CHAIN_OF_TRUST
+@@ -475,7 +488,7 @@ config ENV_EXT4_FILE
+ config ENV_ADDR
+ 	hex "Environment address"
+ 	depends on ENV_IS_IN_FLASH || ENV_IS_IN_NVRAM || ENV_IS_IN_ONENAND || \
+-		     ENV_IS_IN_REMOTE || ENV_IS_IN_SPI_FLASH
++		     ENV_IS_IN_REMOTE || ENV_IS_IN_SPI_FLASH || ENV_IS_IN_MTD
+ 	default 0x0 if ENV_IS_IN_SPI_FLASH
+ 	help
+ 	  Offset from the start of the device (or partition)
+@@ -490,7 +503,7 @@ config ENV_ADDR_REDUND
+ config ENV_OFFSET
+ 	hex "Environment offset"
+ 	depends on ENV_IS_IN_EEPROM || ENV_IS_IN_MMC || ENV_IS_IN_NAND || \
+-		    ENV_IS_IN_SPI_FLASH
++		    ENV_IS_IN_SPI_FLASH || ENV_IS_IN_MTD
+ 	default 0x3f8000 if ARCH_ROCKCHIP && ENV_IS_IN_MMC
+ 	default 0x140000 if ARCH_ROCKCHIP && ENV_IS_IN_SPI_FLASH
+ 	default 0x88000 if ARCH_SUNXI
+@@ -523,6 +536,19 @@ config ENV_SIZE
+ 	help
+ 	  Size of the environment storage area
+ 
++config ENV_RANGE
++       hex "Specifies the length of the region in"
++       default ENV_SIZE
++       help
++	  Specifies the length of the region in which the environment
++	  can be written.  This should be a multiple of the NAND device's
++	  block size.  Specifying a range with more erase blocks than
++	  are needed to hold CONFIG_ENV_SIZE allows bad blocks within
++	  the range to be avoided.
++
++          U-Boot use this option already, but not integrated into Kconfig yet.
++          Just integrated.
++
+ config ENV_SECT_SIZE
+ 	hex "Environment Sector-Size"
+ 	depends on ENV_IS_IN_FLASH || ENV_IS_IN_SPI_FLASH
+diff --git a/env/Makefile b/env/Makefile
+index e2a165b8f1..de77b35f8c 100644
+--- a/env/Makefile
++++ b/env/Makefile
+@@ -29,5 +29,6 @@ obj-$(CONFIG_$(SPL_TPL_)ENV_IS_IN_EXT4) += ext4.o
+ obj-$(CONFIG_$(SPL_TPL_)ENV_IS_IN_NAND) += nand.o
+ obj-$(CONFIG_$(SPL_TPL_)ENV_IS_IN_SPI_FLASH) += sf.o
+ obj-$(CONFIG_$(SPL_TPL_)ENV_IS_IN_FLASH) += flash.o
++obj-$(CONFIG_ENV_IS_IN_MTD) += mtd.o
+ 
+ CFLAGS_embedded.o := -Wa,--no-warn -DENV_CRC=$(shell tools/envcrc 2>/dev/null)
+diff --git a/env/env.c b/env/env.c
+index 9237bb9c74..3165818dd7 100644
+--- a/env/env.c
++++ b/env/env.c
+@@ -83,6 +83,9 @@ static enum env_location env_locations[] = {
+ #ifdef CONFIG_ENV_IS_IN_UBI
+ 	ENVL_UBI,
+ #endif
++#ifdef CONFIG_ENV_IS_IN_MTD
++	ENVL_MTD,
++#endif
+ #ifdef CONFIG_ENV_IS_NOWHERE
+ 	ENVL_NOWHERE,
+ #endif
+diff --git a/env/mtd.c b/env/mtd.c
+new file mode 100644
+index 0000000000..823bf2c8aa
+--- /dev/null
++++ b/env/mtd.c
+@@ -0,0 +1,248 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * (C) Copyright 2020 - Cortina Access Inc.
++ *
++ */
++#include <common.h>
++#include <dm.h>
++#include <env.h>
++#include <env_internal.h>
++#include <malloc.h>
++#include <memalign.h>
++#include <mtd.h>
++#include <linux/mtd/mtd.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++static struct mtd_info *get_mtd_by_name(const char *name)
++{
++	struct mtd_info *mtd;
++
++	mtd_probe_devices();
++
++	mtd = get_mtd_device_nm(name);
++	if (IS_ERR_OR_NULL(mtd))
++		printf("MTD device %s not found, ret %ld\n", name,
++		       PTR_ERR(mtd));
++
++	return mtd;
++}
++
++/* Logic taken from fs/ubifs/recovery.c:is_empty() */
++static bool mtd_oob_write_is_empty(struct mtd_oob_ops *op)
++{
++	int i;
++
++	for (i = 0; i < op->len; i++)
++		if (op->datbuf[i] != 0xff)
++			return false;
++
++	for (i = 0; i < op->ooblen; i++)
++		if (op->oobbuf[i] != 0xff)
++			return false;
++
++	return true;
++}
++
++static int mtd_special_write_oob(struct mtd_info *mtd, u64 off,
++				 struct mtd_oob_ops *io_op,
++				 bool write_empty_pages, bool woob)
++{
++	int ret = 0;
++
++	/*
++	 * By default, do not write an empty page.
++	 * Skip it by simulating a successful write.
++	 */
++	if (!write_empty_pages && mtd_oob_write_is_empty(io_op)) {
++		io_op->retlen = mtd->writesize;
++		io_op->oobretlen = woob ? mtd->oobsize : 0;
++	} else {
++		ret = mtd_write_oob(mtd, off, io_op);
++	}
++
++	return ret;
++}
++
++static int do_mtd_erase(const char *name,  u64 off, u64 len, bool scrub)
++{
++	struct erase_info erase_op = {};
++	struct mtd_info *mtd;
++	int ret = 0;
++
++	mtd = get_mtd_by_name(name);
++	if (IS_ERR_OR_NULL(mtd))
++		return -ENODEV;
++
++	erase_op.mtd = mtd;
++	erase_op.addr = off;
++	erase_op.len = mtd->erasesize;
++	erase_op.scrub = scrub;
++
++	while (len) {
++		ret = mtd_erase(mtd, &erase_op);
++
++		if (ret) {
++			/* Abort if its not a bad block error */
++			if (ret != -EIO)
++				break;
++			printf("Skipping bad block at 0x%08llx\n",
++			       erase_op.addr);
++		}
++
++		len -= mtd->erasesize;
++		erase_op.addr += mtd->erasesize;
++	}
++
++	put_mtd_device(mtd);
++
++	return ret;
++}
++
++static int mtd_env_io(const char *name, bool read, u64 start_off, u64 len,
++		      u64 end, void *buf)
++{
++	int ret;
++	bool has_pages;
++	bool write_empty_pages;
++	u64 off, remaining = len;
++	struct mtd_info *mtd;
++	struct mtd_oob_ops io_op = {};
++
++	mtd = get_mtd_device_nm(name);
++	if (IS_ERR_OR_NULL(mtd))
++		return -ENODEV;
++
++	if (mtd->type == MTD_NANDFLASH || mtd->type == MTD_MLCNANDFLASH)
++		has_pages = true;
++
++	write_empty_pages = !has_pages;
++
++	io_op.mode = MTD_OPS_AUTO_OOB;
++	io_op.len = has_pages ? mtd->writesize : len;
++	io_op.ooblen = 0;
++	io_op.datbuf = buf;
++	io_op.oobbuf = NULL;
++
++	off = start_off;
++	while (mtd_block_isbad(mtd, off))
++		off += mtd->erasesize;
++
++	/* Loop over the pages to do the actual read/write */
++	while (remaining) {
++		/* Skip the block if it is bad */
++		if (mtd_block_isbad(mtd, off)) {
++			off += mtd->erasesize;
++			continue;
++		}
++
++		if (read)
++			ret = mtd_read_oob(mtd, off, &io_op);
++		else
++			ret = mtd_special_write_oob(mtd, off, &io_op,
++						    write_empty_pages, false);
++
++		if (ret) {
++			printf("Failure while %s at offset 0x%llx\n",
++			       "reading",  off);
++			break;
++		}
++
++		off += io_op.retlen;
++		remaining -= io_op.retlen;
++		io_op.datbuf += io_op.retlen;
++		io_op.oobbuf += io_op.oobretlen;
++	}
++
++	put_mtd_device(mtd);
++	return ret;
++}
++
++static int env_mtd_load(void)
++{
++	int ret;
++	u64 end;
++	char *buf = NULL;
++
++	buf = (char *)memalign(ARCH_DMA_MINALIGN, CONFIG_ENV_SIZE);
++	if (!buf) {
++		env_set_default("malloc() failed", 0);
++		return -EIO;
++	}
++
++	end = CONFIG_ENV_OFFSET + CONFIG_ENV_RANGE;
++	ret = mtd_env_io(CONFIG_ENV_MTD_NAME, true, CONFIG_ENV_OFFSET,
++			 CONFIG_ENV_SIZE,  end, buf);
++	if (ret)
++		env_set_default(CONFIG_ENV_MTD_NAME " failed", 0);
++
++	ret = env_import(buf, 1);
++	if (!ret)
++		gd->env_valid = ENV_VALID;
++
++	free(buf);
++	return ret;
++}
++
++#if defined(CONFIG_CMD_SAVEENV)
++static int mtd_erase_write_env(const char *name,
++			       const struct erase_info *location,
++			       u_char *env_new)
++{
++	int ret;
++	u64 end;
++	struct mtd_info  *mtd = get_mtd_device_nm(name);
++
++	if (IS_ERR_OR_NULL(mtd))
++		return -ENODEV;
++
++	printf("Erasing ...\n");
++	ret = do_mtd_erase(CONFIG_ENV_MTD_NAME, location->addr, location->len,
++			   false);
++	if (ret)
++		goto ERR_EXIT;
++
++	printf("Writing to %s ...", CONFIG_ENV_MTD_NAME);
++
++	end = location->addr + CONFIG_ENV_RANGE;
++	ret = mtd_env_io(CONFIG_ENV_MTD_NAME, false, location->addr,
++			 location->len, end, env_new);
++	puts(ret ? "FAILED!\n" : "OK\n");
++
++ERR_EXIT:
++	put_mtd_device(mtd);
++	return ret;
++}
++
++static int env_mtd_save(void)
++{
++	int	ret = 0;
++	int	env_idx = 0;
++
++	ALLOC_CACHE_ALIGN_BUFFER(env_t, env_new, 1);
++
++	static struct erase_info location[] = {
++		{
++			.len = 0x100000,
++			.addr = CONFIG_ENV_OFFSET,
++		},
++	};
++
++	ret = env_export(env_new);
++	if (ret)
++		return ret;
++
++	ret = mtd_erase_write_env(CONFIG_ENV_MTD_NAME, &location[env_idx],
++				  (u_char *)env_new);
++	return ret;
++}
++#endif
++
++U_BOOT_ENV_LOCATION(mtd) = {
++	.location	= ENVL_MTD,
++	ENV_NAME("MTD")
++	.load		= env_mtd_load,
++#if defined(CONFIG_CMD_SAVEENV)
++	.save		= env_save_ptr(env_mtd_save),
++#endif
++};
+diff --git a/include/env_internal.h b/include/env_internal.h
+index 90a4df8a72..84aa4393b9 100644
+--- a/include/env_internal.h
++++ b/include/env_internal.h
+@@ -133,6 +133,7 @@ enum env_location {
+ 	ENVL_REMOTE,
+ 	ENVL_SPI_FLASH,
+ 	ENVL_UBI,
++	ENVL_MTD,
+ 	ENVL_NOWHERE,
+ 
+ 	ENVL_COUNT,
+-- 
+2.20.1
+
