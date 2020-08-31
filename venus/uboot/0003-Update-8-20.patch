@@ -1,0 +1,387 @@
+From ccf6cd5d21b24b456649f523b7740861f3333174 Mon Sep 17 00:00:00 2001
+From: Kate Liu <kate.liu@cortina-access.com>
+Date: Thu, 20 Aug 2020 07:33:24 +0000
+Subject: [PATCH 3/3] Update 8/20
+
+Probe ok, env load nand failed and turned off, nand_rw_page failed.
+
+Type:refactoring
+Scope:venus
+Bug:n/a
+---
+ configs/cortina_venus-engboard-nand_defconfig |  10 +-
+ drivers/mtd/nand/raw/cortina_nand.c           | 138 ++++++++++++++++++++------
+ drivers/mtd/nand/raw/cortina_nand.h           |   7 +-
+ 3 files changed, 113 insertions(+), 42 deletions(-)
+
+diff --git a/configs/cortina_venus-engboard-nand_defconfig b/configs/cortina_venus-engboard-nand_defconfig
+index 274ada8..a98d983 100644
+--- a/configs/cortina_venus-engboard-nand_defconfig
++++ b/configs/cortina_venus-engboard-nand_defconfig
+@@ -36,11 +36,11 @@ CONFIG_MTD_RAW_NAND=y
+ CONFIG_NAND_CORTINA=y
+ 
+ # UBoot Environment Variable support
+-CONFIG_ENV_SIZE=0x20000
+-CONFIG_ENV_OFFSET=0x400000
+-CONFIG_ENV_OFFSET_REDUND=0x500000
+-CONFIG_SYS_REDUNDAND_ENVIRONMENT=y
+-CONFIG_ENV_IS_IN_NAND=y
++#CONFIG_ENV_SIZE=0x20000
++#CONFIG_ENV_OFFSET=0x400000
++#CONFIG_ENV_OFFSET_REDUND=0x500000
++#CONFIG_SYS_REDUNDAND_ENVIRONMENT=y
++#CONFIG_ENV_IS_IN_NAND=y
+ 
+ # Ethernet Support
+ CONFIG_NET_RANDOM_ETHADDR=y
+diff --git a/drivers/mtd/nand/raw/cortina_nand.c b/drivers/mtd/nand/raw/cortina_nand.c
+index c802ca0..df75a41 100644
+--- a/drivers/mtd/nand/raw/cortina_nand.c
++++ b/drivers/mtd/nand/raw/cortina_nand.c
+@@ -328,7 +328,7 @@ uint8_t *ca_nand_transfer_oob(struct nand_chip * chip, uint8_t * oob, struct mtd
+         return NULL;
+ }
+ 
+-
++#if 0
+ /**
+  * ca_nand_do_read_ops - [Internal] Read data with ECC
+  *
+@@ -466,7 +466,7 @@ int ca_nand_do_read_ops(struct mtd_info *mtd, loff_t from, struct mtd_oob_ops *o
+ 
+         return mtd->ecc_stats.corrected - stats.corrected ? -EUCLEAN : 0;
+ }
+-
++#endif
+ /**
+  * ca_nand_read - [MTD Interface] MTD compability function for nand_do_read_ecc
+  * @mtd:        MTD device structure
+@@ -609,6 +609,19 @@ int init_nand_dma(struct nand_chip *nand)
+ 	struct nand_drv *info;
+ 	info = (struct nand_drv *)nand_get_controller_data(nand);
+ 
++#ifdef CONFIG_TARGET_VENUS
++        printf("Configure DMA ordering\n");
++        /* Workaround for DMA-reordering issue */
++        writel(8, DMA_AXI_REO_AXI_REO_RD_ORIG_ID);
++        writel(9, DMA_AXI_REO_AXI_REO_RD_ORIG_ID + 0x80);
++        writel(10, DMA_AXI_REO_AXI_REO_RD_ORIG_ID + 0x100);
++        writel(11, DMA_AXI_REO_AXI_REO_RD_ORIG_ID + 0x180);
++        writel(12, DMA_AXI_REO_AXI_REO_RD_ORIG_ID + 0x200);
++        writel(8, DMA_AXI_REO_AXI_REO_WR_ORIG_ID);
++        writel(9, DMA_AXI_REO_AXI_REO_WR_ORIG_ID + 0x80);
++        writel(10, DMA_AXI_REO_AXI_REO_WR_ORIG_ID + 0x100);
++#endif
++
+ 	setbits_le32(&info->dma_glb->dma_glb_dma_lso_ctrl, TX_DMA_ENABLE);
+ 	setbits_le32(&info->dma_glb->dma_glb_dma_ssp_rx_ctrl, TX_DMA_ENABLE | DMA_CHECK_OWNER);
+ 	setbits_le32(&info->dma_glb->dma_glb_dma_ssp_tx_ctrl, RX_DMA_ENABLE | DMA_CHECK_OWNER);
+@@ -681,16 +694,17 @@ static void ca_nand_command(struct mtd_info *mtd, unsigned int command,
+ 	 */
+ 
+ 	/* Emulate NAND_CMD_READOOB */
++	printf("command: %d\n", command);
+ 	if (command == NAND_CMD_READOOB) {
++		printf("IS nand_cmd_readoob\N");
+ 		isReadOOB = true;
+-		printf("command==NAND_CMD_READOOB\n");
+ 		assert(mtd->writesize != 0);
+ 		column += mtd->writesize;
+ 		command = NAND_CMD_READ0;
+ 	} else {
+ 		isReadOOB = false;
+ 	}
+-
++	printf("isReadOOB: %d\n", isReadOOB);
+ 	/* Reset FIFO before issue new command */
+ 	writel(ECC_RESET_ALL, \
+ 		&info->reg->flash_nf_ecc_reset);
+@@ -713,7 +727,8 @@ static void ca_nand_command(struct mtd_info *mtd, unsigned int command,
+ 	 */
+ 	switch (command) {
+ 	case NAND_CMD_READID:
+-		//clrbits_le32(&info->reg->flash_nf_ecc_control, BCH_ENABLE);
++		printf("READID\n");
++		clrbits_le32(&info->reg->flash_nf_ecc_control, BCH_ENABLE);
+ 		//printf("flash_nf_ecc_control: %x\n", readl(&info->reg->flash_nf_ecc_control));
+ 		writel(NAND_CMD_READID, &info->reg->flash_nf_command);
+ 		writel(column & 0xFF, &info->reg->flash_nf_address_1);
+@@ -723,7 +738,7 @@ static void ca_nand_command(struct mtd_info *mtd, unsigned int command,
+ 		/* 1 byte CMD cycle */
+ 		clrbits_le32(&info->reg->flash_nf_count, GENMASK(6, 4));
+ 		/* Data cycle */
+-		clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(21, 8), REG_DATA_COUNT_DATA_8 << 8);
++		clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(21, 8), REG_DATA_COUNT_DATA_8);
+ 		/* 0 OOB cycle */
+ 		setbits_le32(&info->reg->flash_nf_count, GENMASK(31, 22));
+ 		/* clear FLASH_NF_ACCESS */
+@@ -1183,7 +1198,7 @@ static int nand_rw_page(struct mtd_info *mtd, struct nand_chip *chip,
+ 
+ 	info = (struct nand_drv *)nand_get_controller_data(chip);
+ 
+-	check_flash_ctrl_status(mtd);
++//	check_flash_ctrl_status(mtd);
+ 
+ 	if (with_ecc == 1) {
+ 		switch (info->config.nand_ecc_strength) {
+@@ -1216,30 +1231,72 @@ static int nand_rw_page(struct mtd_info *mtd, struct nand_chip *chip,
+ 		printf("flash_nf_bch_control: %x\n", readl(&info->reg->flash_nf_bch_control));
+ 	}
+ 
+-	/* Fill Extend address */
+-	ext_addr = ((page << chip->page_shift) / 0x8000000);
+-//	clrsetbits_le32(&info->reg->flash_nf_access, \
+-                                GENMASK(7, 0), (uintptr_t)ext_addr);
+-	writel(0, &info->reg->flash_nf_access);
+-        printf("flash_nf_access: %x\n", readl(&info->reg->flash_nf_access));
+ #if 0
+ 	/* Disable TXQ */
+-	clrbits_le32(&info->dma_nand->dma_q_txq_control, GENMASK(0, 0));
++	clrbits_le32(&info->dma_nand->dma_q_txq_control, TX_DMA_ENABLE);
+ 	printf("dma_q_txq_control: %x\n", readl(&info->dma_nand->dma_q_txq_control));
+ 
+ 	/* Clear interrupt */
+-	setbits_le32(&info->dma_nand->dma_q_rxq_coal_interrupt, GENMASK(0, 0));
+-	printf("dma_q_rxq_coal_interrupt: %x\n", readl(&info->dma_nand->dma_q_rxq_coal_interrupt));
+ 	setbits_le32(&info->dma_nand->dma_q_txq_coal_interrupt, GENMASK(0, 0));
++	printf("dma_q_txq_coal_interrupt: %x\n", readl(&info->dma_nand->dma_q_txq_coal_interrupt));
++	setbits_le32(&info->dma_nand->dma_q_rxq_coal_interrupt, GENMASK(0, 0));
+ 	printf("dma_q_rxq_coal_interrupt: %x\n", readl(&info->dma_nand->dma_q_rxq_coal_interrupt));
+ 
++	/*for indirect access with DMA, because DMA not ready   */
++	/* first CMD */
++	clrsetbits_le32(&info->reg->flash_nf_command, GENMASK(7, 0), NAND_CMD_READ0);
++        /* Data cycle */
++        clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(21, 8), mtd->writesize - 1);
++        /* 0 OOB cycle */
++        clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(31, 22), mtd->oobsize - 1);
++	if (chip->chipsize < (32 << 20)) {
++		printf("<32\n");
++		writel(((page & 0x00ffffff) << 8), &info->reg->flash_nf_address_1);
++                writel(((page & 0xff000000) >> 24), &info->reg->flash_nf_address_2);
++                /* 1 byte ADDR cycle */
++                clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(1, 0), REG_ADDR_COUNT_3);
++                /* 1 byte CMD cycle */
++                clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(6, 4), REG_CMD_COUNT_1TOGO);
++        } else if ((chip->chipsize >= (32 << 20))
++                   && (chip->chipsize <= (128 << 20))) {
++		printf(">32 & <128 \n");
++		writel(((page & 0xffff) << 16), &info->reg->flash_nf_address_1);
++                writel(((page & 0xffff0000) >> 16), &info->reg->flash_nf_address_2);
++                /* 1 byte ADDR cycle */
++                clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(1, 0), REG_ADDR_COUNT_4);
++                /* 1 byte CMD cycle */
++                clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(6, 4), REG_CMD_COUNT_1TOGO);
++
++                if (mtd->writesize > REG_DATA_COUNT_512P_DATA) {
++			/* 2 CMD cycles */
++                	clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(6, 4), REG_CMD_COUNT_2TOGO);
++			/* second CMD */
++			clrsetbits_le32(&info->reg->flash_nf_command, GENMASK(15, 8), NAND_CMD_READSTART);
++                }
++        } else {                /*if((chip->chipsize > (128 << 20)) )) */
++		printf(">128 \n");
++		writel(((page & 0xffff) << 16), &info->reg->flash_nf_address_1);
++		printf("flash_nf_address_1: %x\n", readl(&info->reg->flash_nf_address_1));
++                writel(((page & 0xffff0000) >> 16), &info->reg->flash_nf_address_2);
++		printf("flash_nf_address_2: %x\n", readl(&info->reg->flash_nf_address_2));
++                /* 1 byte ADDR cycle */
++                clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(1, 0), REG_ADDR_COUNT_5);
++		printf("flash_nf_count: %x\n", readl(&info->reg->flash_nf_count));
++                /* 2 byte CMD cycle */
++                clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(6, 4), REG_CMD_COUNT_2TOGO);
++		printf("flash_nf_count: %x\n", readl(&info->reg->flash_nf_count));
++		/* second CMD */
++		clrsetbits_le32(&info->reg->flash_nf_command, GENMASK(15, 8), NAND_CMD_READSTART << 8);
++		printf("flash_nf_command: %x\n", readl(&info->reg->flash_nf_command));
++        }
++#endif
+ 	/* Fill Extend address */
+ 	ext_addr = ((page << chip->page_shift) / 0x8000000);
+ 
+ 	clrsetbits_le32(&info->reg->flash_nf_access, \
+ 				GENMASK(7, 0), (uintptr_t)ext_addr);
+ 	printf("flash_nf_access: %x\n", readl(&info->reg->flash_nf_access));
+-#endif
++
+ 	addr =  (uintptr_t )((page << chip->page_shift) % 0x8000000);
+ 	addr = (uintptr_t )(addr + info->flash_base);
+ 
+@@ -1277,13 +1334,13 @@ static int nand_rw_page(struct mtd_info *mtd, struct nand_chip *chip,
+ 		rx_desc[dma_index].own = OWN_DMA;
+ 		rx_desc[dma_index].buf_len = mtd->oobsize;
+ 		rx_desc[dma_index].buf_adr = (uintptr_t)(chip->oob_poi);
+-//		dma_index++;
+-//		dma_index %= CA_DMA_DESC_NUM;
++		dma_index++;
++		dma_index %= CA_DMA_DESC_NUM;
+ 	}
+ 
++	
+ 	dma_index++;
+-        dma_index %= CA_DMA_DESC_NUM;
+-
++	dma_index %= CA_DMA_DESC_NUM;
+ 	if (is_writing == 1)
+ 		clrsetbits_le32(&info->reg->flash_fifo_control, GENMASK(1, 0), FIFO_WRITE);
+ 	else {
+@@ -1298,15 +1355,13 @@ static int nand_rw_page(struct mtd_info *mtd, struct nand_chip *chip,
+ 	/* Update DMA R/W pointer */
+ 	clrsetbits_le32(&info->dma_nand->dma_q_txq_wptr, GENMASK(12, 0), dma_index);
+ 	printf("dma_q_txq_wptr: %x\n", readl(&info->dma_nand->dma_q_txq_wptr));
+-//	clrsetbits_le32(&info->dma_nand->dma_q_rxq_rptr, GENMASK(12, 0), dma_index);
+-//	printf("dma_q_rxq_rptr: %x\n", readl(&info->dma_nand->dma_q_rxq_rptr));
+ 
+ 	/* Start DMA */
+ 	setbits_le32(&info->dma_nand->dma_q_txq_control, GENMASK(0, 0));
+ 	printf("dma_q_txq_control: %x\n", readl(&info->dma_nand->dma_q_txq_control));
+ 
+-//	clrsetbits_le32(&info->dma_nand->dma_q_rxq_rptr, GENMASK(12, 0), dma_index);
+-//        printf("dma_q_rxq_rptr: %x\n", readl(&info->dma_nand->dma_q_rxq_rptr));
++	clrsetbits_le32(&info->dma_nand->dma_q_rxq_rptr, GENMASK(12, 0), dma_index);
++        printf("dma_q_rxq_rptr: %x\n", readl(&info->dma_nand->dma_q_rxq_rptr));
+ 
+ 	/* Wait TX DMA done */
+ 	ret = readl_poll_timeout(&info->dma_nand->dma_q_txq_coal_interrupt, reg_v,
+@@ -1315,9 +1370,8 @@ static int nand_rw_page(struct mtd_info *mtd, struct nand_chip *chip,
+ 		pr_err("TX DMA timeout\n");
+ 		return -ETIMEDOUT;
+ 	}
+-	printf("dma_q_txq_coal_interrupt: %x\n", readl(&info->dma_nand->dma_q_txq_coal_interrupt));
++
+ 	setbits_le32(&info->dma_nand->dma_q_txq_coal_interrupt, 1);
+-	printf("dma_q_rxq_coal_interrupt: %x\n", readl(&info->dma_nand->dma_q_rxq_coal_interrupt));
+ 
+ 	/* Wait RX DMA done */
+ 	ret = readl_poll_timeout(&info->dma_nand->dma_q_rxq_coal_interrupt, reg_v,
+@@ -1327,7 +1381,6 @@ static int nand_rw_page(struct mtd_info *mtd, struct nand_chip *chip,
+ 		return -ETIMEDOUT;
+ 	}
+ 	setbits_le32(&info->dma_nand->dma_q_rxq_coal_interrupt, 1);
+-	printf("dma_q_rxq_coal_interrupt: %x\n", readl(&info->dma_nand->dma_q_rxq_coal_interrupt));
+ 
+ 	/* ECC correction */
+ 	if (with_ecc == 1) {
+@@ -1343,7 +1396,7 @@ static int nand_rw_page(struct mtd_info *mtd, struct nand_chip *chip,
+ 		else
+ 			ca_do_bch_encode(mtd, chip, buf, page);
+ 	}
+-
++	printf("dma_index: %d\n", dma_index);
+ 	return 0;
+ }
+ 
+@@ -1394,7 +1447,22 @@ static int nand_write_page_hwecc(struct mtd_info *mtd,
+ static int nand_read_page_raw(struct mtd_info *mtd,
+ 	struct nand_chip *chip, uint8_t *buf, int oob_required, int page)
+ {
++	struct nand_drv *info;
++
++        info = (struct nand_drv *)nand_get_controller_data(chip);
++	printf("nand_read_page_raw\n");
++#if 1
++	/* reset  nand flash ecc & state machine*/
++	setbits_le32(&info->reg->flash_nf_ecc_reset, ECC_RESET_ALL);
++	
++	/* clear interrupt */
++	setbits_le32(&info->reg->flash_flash_interrupt, REGIRQ_CLEAR);
++
++	/* reset  nand flash ecc & state machine*/
++        setbits_le32(&info->reg->flash_nf_ecc_reset, RESET_NFLASH_ECC);	
++#endif
+ 	return nand_rw_page(mtd, chip, buf, page, 0, 0);
++	
+ }
+ 
+ /**
+@@ -1526,7 +1594,6 @@ static int nand_rw_oob(struct mtd_info *mtd, struct nand_chip *chip,
+ 
+         for (int i = 0; i < mtd->oobsize / 4; i++) {
+ 		clrsetbits_le32(&info->reg->flash_nf_access, AUTO_RESET | NFLASH_ENABLE_ALTERNATIVE, NFLASH_REG_WIDTH_32);
+-		printf("flash_nf_access: %x\n", readl(&info->reg->flash_nf_access));
+ 
+ 		writel(NFLASH_GO | NFLASH_RD, &info->reg->flash_flash_access_start);
+ 
+@@ -1550,15 +1617,19 @@ static int nand_read_oob(struct mtd_info *mtd, struct nand_chip *chip,
+ 	int page)
+ {
+ 	struct nand_drv *info;
++	printf("nand_read_oob fucntion ...\n");
++	int ret;
+ 
+ 	info = (struct nand_drv *)nand_get_controller_data(chip);
+ 
++	printf("cmdfunc NAND_CMD_READOOB: %d\n", NAND_CMD_READOOB);
+ 	chip->cmdfunc(mtd, NAND_CMD_READOOB, 0, page);
+ 
+ 	/* Data cycle */
+         clrsetbits_le32(&info->reg->flash_nf_count, GENMASK(21, 8), REG_DATA_COUNT_EMPTY);
+ 
+-	nand_rw_oob(mtd, chip, page, 0, 0);
++	ret = nand_rw_oob(mtd, chip, page, 0, 0);
++	printf("ret: %d\n", ret);
+ 
+ 	return 0;
+ }
+@@ -1697,6 +1768,7 @@ static int ca_nand_probe(struct udevice *dev)
+ 	struct mtd_info *our_mtd;
+ 	int ret;
+ 
++	printf("ca_nand_probe function .....\n");
+ 	if (fdt_decode_nand(dev, info)) {
+ 		printf("Could not decode nand-flash in device tree\n");
+ 		return -1;
+@@ -1733,6 +1805,7 @@ static int ca_nand_probe(struct udevice *dev)
+ 
+ 	our_mtd = nand_to_mtd(nand);
+ 	ret = nand_scan_ident(our_mtd, CONFIG_SYS_NAND_MAX_CHIPS, NULL);
++	printf("ret: %d\n", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -1759,7 +1832,8 @@ static int ca_nand_probe(struct udevice *dev)
+ 		return ret;
+ 
+ 	ret = nand_scan_tail(our_mtd);
+-	our_mtd->_read = ca_nand_read;
++//	our_mtd->_read = ca_nand_read;
++//	our_mtd->_read = nand_read_oob;
+ 	if (ret)
+ 		return ret;
+ 
+diff --git a/drivers/mtd/nand/raw/cortina_nand.h b/drivers/mtd/nand/raw/cortina_nand.h
+index 0bcf27e..f28a79c 100644
+--- a/drivers/mtd/nand/raw/cortina_nand.h
++++ b/drivers/mtd/nand/raw/cortina_nand.h
+@@ -230,7 +230,7 @@ enum {
+ #define NFLASH_READY	BIT(26)
+ 
+ /* Bit field in FLASH_NF_ACCESS */
+-#define NFLASH_ENABLE_ALTERNATIVE	(0 << 15)
++#define NFLASH_ENABLE_ALTERNATIVE	BIT(15)
+ #define AUTO_RESET			BIT(16)
+ #define NFLASH_REG_WIDTH_RESERVED	(0x3 << 10)
+ #define NFLASH_REG_WIDTH_32		(0x2 << 10)
+@@ -262,9 +262,6 @@ enum {
+ #define REG_DATA_COUNT_DATA_8		(0x7 << 8)
+ #define REG_OOB_COUNT_EMPTY		(0x3ff << 22)
+ 
+-/* Bit field in FLASH_NF_COMMAND */
+-
+-
+ /* Bit field in FLASH_FLASH_ACCESS_START */
+ #define NFLASH_GO		BIT(0)
+ #define NFLASH_FIFO_REQ		BIT(2)
+@@ -285,7 +282,7 @@ enum {
+ #define FIFO_WRITE	3
+ 
+ /* NFLASH INTERRUPT */
+-#define REGIRQ_CLEAR	0
++#define REGIRQ_CLEAR	BIT(0)
+ #define F_ADDR_ERR  	2
+ 
+ /* BCH ECC field definition */
+-- 
+1.8.3.1
+
