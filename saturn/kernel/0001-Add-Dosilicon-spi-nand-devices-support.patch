@@ -1,18 +1,17 @@
-From 0c939cc3bdd5d0465bb7e7586d8506b3621e9828 Mon Sep 17 00:00:00 2001
+From 49c8aa904f3b05756db3be58ae8e4f1031d17035 Mon Sep 17 00:00:00 2001
 From: Pengpeng Chen <pengpeng.chen@cortina-access.com>
-Date: Wed, 26 Aug 2020 17:33:29 +0800
+Date: Thu, 24 Sep 2020 17:51:47 +0800
 Subject: [PATCH] Add Dosilicon spi-nand devices support
 
 Type: fix
 Scope: saturn-sfu, saturn2-sfu
 Bug: N/A
-Signed-off-by: Pengpeng Chen <pengpeng.chen@cortina-access.com>
 ---
- drivers/mtd/spinand/Makefile    |  10 ++-
- drivers/mtd/spinand/core.c      |   1 +
- drivers/mtd/spinand/dosilicon.c | 151 ++++++++++++++++++++++++++++++++++++++++
- include/linux/mtd/spinand.h     |   1 +
- 4 files changed, 162 insertions(+), 1 deletion(-)
+ drivers/mtd/spinand/Makefile    | 10 ++++-
+ drivers/mtd/spinand/core.c      |  1 +
+ drivers/mtd/spinand/dosilicon.c | 99 +++++++++++++++++++++++++++++++++++++++++
+ include/linux/mtd/spinand.h     |  1 +
+ 4 files changed, 110 insertions(+), 1 deletion(-)
  create mode 100644 drivers/mtd/spinand/dosilicon.c
 
 diff --git a/drivers/mtd/spinand/Makefile b/drivers/mtd/spinand/Makefile
@@ -50,10 +49,10 @@ index 2578032..3ee7db9 100644
  static int spinand_manufacturer_detect(struct spinand_device *spinand)
 diff --git a/drivers/mtd/spinand/dosilicon.c b/drivers/mtd/spinand/dosilicon.c
 new file mode 100644
-index 00000000..a08ac2b
+index 00000000..5d1a3d0c
 --- /dev/null
 +++ b/drivers/mtd/spinand/dosilicon.c
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,99 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Copyright (c) 2020 Cortina Access
@@ -66,7 +65,6 @@ index 00000000..a08ac2b
 +#include <linux/mtd/spinand.h>
 +
 +#define SPINAND_MFR_DOSILICON		0xE5
-+#define DOSILICON_ECCSR_MASK		0x0F
 +
 +static SPINAND_OP_VARIANTS(read_cache_variants,
 +		SPINAND_PAGE_READ_FROM_CACHE_X4_OP(0, 1, NULL, 0),
@@ -105,56 +103,6 @@ index 00000000..a08ac2b
 +	.free = ds35qxga_ooblayout_free,
 +};
 +
-+static int ds35q1ga_get_eccsr(struct spinand_device *spinand, u8 *eccsr)
-+{
-+	struct spi_mem_op op = SPI_MEM_OP(SPI_MEM_OP_CMD(0x7c, 1),
-+					  SPI_MEM_OP_NO_ADDR,
-+					  SPI_MEM_OP_DUMMY(1, 1),
-+					  SPI_MEM_OP_DATA_IN(1, eccsr, 1));
-+
-+	int ret = spi_mem_exec_op(spinand->spimem, &op);
-+
-+	if (ret)
-+		return ret;
-+
-+	*eccsr &= DOSILICON_ECCSR_MASK;
-+	return 0;
-+}
-+
-+static int ds35q1ga_ecc_get_status(struct spinand_device *spinand,
-+				       u8 status)
-+{
-+	struct nand_device *nand = spinand_to_nand(spinand);
-+	u8 eccsr;
-+
-+	switch (status & STATUS_ECC_MASK) {
-+	case STATUS_ECC_NO_BITFLIPS:
-+		return 0;
-+
-+	case STATUS_ECC_UNCOR_ERROR:
-+		return -EBADMSG;
-+
-+	case STATUS_ECC_HAS_BITFLIPS:
-+		/*
-+		 * Let's try to retrieve the real maximum number of bitflips
-+		 * in order to avoid forcing the wear-leveling layer to move
-+		 * data around if it's not necessary.
-+		 */
-+		if (ds35q1ga_get_eccsr(spinand, &eccsr))
-+			return nand->eccreq.strength;
-+
-+		if (WARN_ON(eccsr > nand->eccreq.strength || !eccsr))
-+			return nand->eccreq.strength;
-+
-+		return eccsr;
-+
-+	default:
-+		break;
-+	}
-+
-+	return -EINVAL;
-+}
-+
 +static const struct spinand_info dosilicon_spinand_table[] = {
 +	SPINAND_INFO("DS35Q1GA_IB", 0x71,
 +		     NAND_MEMORG(1, 2048, 64, 64, 1024, 1, 1, 1),
@@ -163,8 +111,7 @@ index 00000000..a08ac2b
 +					      &write_cache_variants,
 +					      &update_cache_variants),
 +		     SPINAND_HAS_QE_BIT,
-+		     SPINAND_ECCINFO(&ds35qxga_ooblayout,
-+				     ds35q1ga_ecc_get_status)),
++		     SPINAND_ECCINFO(&ds35qxga_ooblayout, NULL)),
 +	SPINAND_INFO("DS35Q2GA_IB", 0x72,
 +		     NAND_MEMORG(1, 2048, 64, 64, 2048, 2, 1, 1),
 +		     NAND_ECCREQ(4, 512),
